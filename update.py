@@ -2,7 +2,9 @@
 """SRC Agent 更新工具（update.exe 源码）。
 
 功能：
-  1. 版本比对：本地 VERSION.txt vs GitHub main 的 VERSION.txt
+  1. 版本比对：本地 VERSION.txt vs 远端 main 的 VERSION.txt
+     （同一仓库的多个等价入口**并行竞速**：raw / api.github.com / CDN。
+       单一域名不可达或 hosts 被改时仍能取到；且不再把「取不到」当成「已是最新」）
   2. 更新：下载 GitHub zipball → 解压临时目录 → 迁移本机保留项
      （data 用户数据合并 / config.yaml / .venv / 桌面壳 exe）→ 旧文件备份 → 原子切换
   3. 首次安装：本机没有 src-agent 时直接安装到 exe 所在目录（可选自动建 venv 装依赖）
@@ -128,14 +130,139 @@ def port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+# ---------- 多源获取（v104 修复：取不到库版本 / 界面无响应）----------
+# 2026-10-11 实测的故障链（本机复现）：
+#   · hosts 把 raw.githubusercontent.com 钉到 127.0.0.1（Steam++ 加速器的屏蔽段）；
+#   · 127.0.0.1:443 上那个本地加速器对该 SNI **只挂住、不响应**（同一端口对
+#     api.github.com 却 0.3s 秒回）⇒ 任何走 raw 的请求都要等满超时；
+#   · 原来的「检查更新」把这次网络调用放进了 Tk 的 `after()` 回调里，等于在**主线程**
+#     做网络 I/O ⇒ 30 秒窗口冻结（"无响应"），异常又被 Tk 吞掉、日志还打印旧值；
+#   · 更隐蔽：SHA256SUMS.txt 也走 raw ⇒ 取不到清单被 verify_extracted 当成
+#     "远端没有清单"，打一行警告就**静默跳过完整性校验**（安全降级）。
+# 处置：同一个仓库准备多个等价入口，**并行竞速**取第一个有效结果。
+#   任一可达即可用；最坏耗时 = 单源超时，而不是各源超时之和（串行时排在前面的
+#   死源会把每次检查都拖满——而 raw 恰恰是最"名正言顺"该排第一的官方源）。
+_SOURCE_TIMEOUT = 8.0     # 单源超时（秒）
+_SOURCE_DEADLINE = 9.0    # 竞速总闸（秒）：兜住 DNS 解析等不受 socket 超时约束的慢路径
+_MAX_VERSION_LEN = 32
+
+
+def _fetch_text(url: str, proxy: str, timeout: float) -> str:
+    return http_get(url, proxy, timeout=int(timeout)).decode("utf-8", "replace").strip()
+
+
+def _fetch_api_content(url: str, proxy: str, timeout: float) -> str:
+    """GitHub contents API：文件正文在 JSON 的 `content` 字段里，且是 base64。"""
+    import base64
+    d = json.loads(_fetch_text(url, proxy, timeout))
+    if not isinstance(d, dict) or not d.get("content"):
+        raise ValueError("API 响应里没有 content 字段")
+    return base64.b64decode(d["content"]).decode("utf-8", "replace").strip()
+
+
+def _api_contents_url(path: str) -> str:
+    return f"https://api.github.com/repos/{REPO}/contents/{path}?ref=main"
+
+
+def fetch_first(sources: list, proxy: str, decode=None,
+                prefer: tuple | None = None, grace: float = 0.0) -> tuple[str, str]:
+    """并行请求多个等价入口，返回 (内容, 源名)。全部失败抛 RuntimeError（附各源原因）。
+
+    decode(u, proxy, timeout)：自定义响应解析（如 API 的 base64）。
+    prefer + grace：给「官方源」一个 grace 秒的独占窗口。CDN 有 12 小时缓存，
+      内容可能滞后——版本号滞后会误报「已是最新」，因此不该抢在官方源前面；
+      只有官方源在窗口内全都无响应时，才采用 CDN 的结果。
+    第一个可用的优先源（或窗口用尽后的第一个成功者）立即返回，不串行等死源。
+    """
+    decode = decode or _fetch_text
+    prefer = tuple(prefer or ())
+    results: dict = {}
+    errors: dict = {}
+
+    def worker(name: str, url: str) -> None:
+        try:
+            text = decode(url, proxy, _SOURCE_TIMEOUT)
+            if not text:
+                raise ValueError("响应为空")
+            results[name] = text
+        except Exception as e:                                   # noqa: BLE001
+            errors[name] = f"{type(e).__name__}: {e}"
+
+    workers = [threading.Thread(target=worker, args=(n, u), daemon=True)
+               for n, u in sources]
+    for t in workers:
+        t.start()
+    t0 = time.time()
+    while True:
+        if results:
+            for n in prefer:
+                if n in results:
+                    return results[n], n
+            # 优先源还有在途的 ⇒ 再等一会儿；都结束了 ⇒ 立刻用兜底源
+            pending = [n for n in prefer if n not in results and n not in errors]
+            if not pending or time.time() - t0 >= grace:
+                n = next(iter(results))
+                return results[n], n
+        if len(results) + len(errors) >= len(workers):
+            break
+        if time.time() - t0 >= _SOURCE_DEADLINE:
+            break
+        time.sleep(0.05)
+    if results:
+        n = next(iter(results))
+        return results[n], n
+    detail = "；".join(f"{n} → {e}" for n, e in errors.items()) or "全部超时"
+    raise RuntimeError(f"所有更新源都不可用（{detail}）")
+
+
+def network_hint() -> str:
+    """取不到远端内容时的可操作提示（把本机实测踩过的坑直接写出来）。"""
+    return ("提示：若上面几条都是超时，优先排查这两处 ——\n"
+            "  ① C:\\Windows\\System32\\drivers\\etc\\hosts 中是否有把 github 相关域名\n"
+            "     指向 127.0.0.1 的行（加速器/去广告工具的屏蔽段会让请求被"
+            "\"挂住\"而不是快速失败）；有则删掉或注释掉该行。\n"
+            "  ② 在本工具「网络」栏填写可用代理后重试（如 http://127.0.0.1:7890）。")
+
+
 # ---------- 版本 ----------
 def local_version(root: Path) -> str:
     f = root / VERSION_FILE
     return f.read_text(encoding="utf-8").strip() if f.exists() else "未安装/未知"
 
 
+# 「官方源」= 内容永远实时（不会被 CDN 缓存）。CDN 只当兜底，见 fetch_first 的 prefer/grace。
+_OFFICIAL_SOURCES = ("raw.githubusercontent.com", "api.github.com", "github.com/raw")
+_VERSION_GRACE = 2.0      # 给官方源的独占窗口（秒）
+
+
+def version_sources() -> list[tuple[str, str]]:
+    """VERSION.txt 的多个等价入口（清单顺序仅用于排障展示，实际是并行竞速）。"""
+    return [
+        ("raw.githubusercontent.com", RAW_VERSION_URL),
+        ("api.github.com", _api_contents_url(VERSION_FILE)),
+        ("github.com/raw", f"https://github.com/{REPO}/raw/main/{VERSION_FILE}"),
+        ("cdn.jsdelivr.net", f"https://cdn.jsdelivr.net/gh/{REPO}@main/{VERSION_FILE}"),
+    ]
+
+
+def _decode_version(url: str, proxy: str, timeout: float) -> str:
+    """解析版本响应并做形态校验 —— 防止把 HTML 错误页/多行内容当成版本号。"""
+    fetch = _fetch_api_content if "api.github.com" in url else _fetch_text
+    text = (fetch(url, proxy, timeout) or "").strip()
+    if (not text or len(text) > _MAX_VERSION_LEN
+            or any(c.isspace() for c in text) or "<" in text):
+        raise ValueError(f"内容不像版本号：{text[:32]!r}")
+    return text
+
+
+def remote_version_detail(proxy: str) -> tuple[str, str]:
+    """返回 (远端版本号, 来源名)。取不到时抛 RuntimeError。"""
+    return fetch_first(version_sources(), proxy, decode=_decode_version,
+                       prefer=_OFFICIAL_SOURCES, grace=_VERSION_GRACE)
+
+
 def remote_version(proxy: str) -> str:
-    return http_get(RAW_VERSION_URL, proxy).decode("utf-8").strip()
+    return remote_version_detail(proxy)[0]
 
 
 # ---------- 包完整性校验（v010 P2-4）----------
@@ -150,13 +277,42 @@ def remote_version(proxy: str) -> str:
 #   避免升级链路被自己掐断。
 # 注：URL 与 `REPO` 一起解析（见文件上半部分「更新源」），改 release_repo.txt 即生效。
 RAW_SHA_URL = f"https://raw.githubusercontent.com/{REPO}/main/SHA256SUMS.txt"
+_SHA_LINE_RE = re.compile(r"^[0-9a-fA-F]{64}\s+\S")
 
 
-def _load_sums(proxy: str) -> dict[str, str]:
-    """拉取远端 SHA256SUMS.txt → {相对路径: sha256}。失败/不存在返回空 dict。"""
+def sum_sources() -> list[tuple[str, str]]:
+    """SHA256SUMS.txt 的多个等价入口（v104）。
+
+    与版本同因同治：只走 raw 时，取不到清单会被当成「远端没有清单」而**静默跳过校验**，
+    那是比"取不到版本"更严重的安全降级。
+    ⚠️ 这里**不列入 CDN 源**：jsDelivr 对 @main 有 12 小时缓存，可能返回旧清单，
+    与刚发布的 zip 逐文件比对必然全红 ⇒ 使用者直接装不上（比跳过校验更糟）。
+    """
+    return [
+        ("raw.githubusercontent.com", RAW_SHA_URL),
+        ("api.github.com", _api_contents_url("SHA256SUMS.txt")),
+        ("github.com/raw", f"https://github.com/{REPO}/raw/main/SHA256SUMS.txt"),
+    ]
+
+
+def _decode_sums(url: str, proxy: str, timeout: float) -> str:
+    """解析清单响应，并做形态校验——避免把 HTML 错误页当成空清单。"""
+    fetch = _fetch_api_content if "api.github.com" in url else _fetch_text
+    text = fetch(url, proxy, timeout) or ""
+    if not any(_SHA_LINE_RE.match(l.strip()) for l in text.splitlines()):
+        raise ValueError("内容不像 SHA256SUMS 清单（没有 <64位hex> 行）")
+    return text
+
+
+def _load_sums(proxy: str, log=None) -> dict[str, str]:
+    """拉取远端 SHA256SUMS.txt → {相对路径: sha256}。全部源失败时返回空 dict。"""
     try:
-        sums = http_get(RAW_SHA_URL, proxy, timeout=15).decode("utf-8")
-    except Exception:
+        sums, src = fetch_first(sum_sources(), proxy, decode=_decode_sums)
+        if log:
+            log(f"完整性清单来源：{src}")
+    except Exception as e:                                       # noqa: BLE001
+        if log:
+            log(f"[警告] 完整性清单获取失败：{e}")
         return {}
     out: dict[str, str] = {}
     for line in sums.splitlines():
@@ -169,9 +325,14 @@ def _load_sums(proxy: str) -> dict[str, str]:
 def verify_extracted(tmp_root: Path, extracted: list[str], proxy: str, log) -> bool:
     """对照 SHA256SUMS.txt 逐文件校验解压结果。返回 False = 必须中止安装。"""
     import hashlib
-    sums = _load_sums(proxy)
+    sums = _load_sums(proxy, log)
     if not sums:
-        log("[警告] 远端未提供 SHA256SUMS.txt，本次跳过完整性校验（建议尽快升级到带清单的版本）。")
+        # 这里原先只有一句「远端未提供清单」——实测恰恰相反：清单一直在，是网络取不到。
+        # 把「取不到」说成「没有」会让人放弃排查，也会把安全降级藏起来。
+        log("[警告] 未能获取远端 SHA256SUMS.txt，本次跳过完整性校验。")
+        log("[警告] 注意：发布库自 1.001 起必带该清单，取不到通常是网络/域名问题"
+            "（失败原因见上一行），不代表远端没有清单。")
+        log(network_hint())
         return True
     bad: list[str] = []
     checked = 0
@@ -265,7 +426,11 @@ def do_update(root: Path, proxy: str, log, progress) -> None:
     if port_in_use(SERVICE_PORT):
         raise RuntimeError(f"服务正在运行（端口 {SERVICE_PORT}）。请先关闭 src-agent 再更新。")
 
-    remote_v = remote_version(proxy)
+    try:
+        remote_v = remote_version(proxy)
+    except Exception as e:                                       # noqa: BLE001
+        # 取不到远端版本时给可操作的话，而不是把 urllib 的超时原文糊到界面上
+        raise RuntimeError(f"获取远端版本失败：{e}\n{network_hint()}") from e
     local_v = local_version(root)
     if remote_v == local_v:
         log(f"已是最新版本（{local_v}），无需更新。")
@@ -555,9 +720,28 @@ class App:
     # -- 动作 --
     def thread_check(self):
         def job():
-            self.log("正在检查 GitHub 最新版本…")
-            self.root.after(0, lambda: self.remote_v.set(remote_version(self.proxy.get())))
-            self.log(f"最新版本：{self.remote_v.get()}")
+            # ⚠️ 网络调用必须留在**本工作线程**里。旧写法是
+            #   `self.root.after(0, lambda: self.remote_v.set(remote_version(...)))`
+            # —— 取值被塞进了 Tk 回调，等于在主线程做网络 I/O：
+            #   · 主循环被占住 ⇒ 窗口假死（超时多长就冻多久，表现为"无响应"）；
+            #   · 回调里抛的异常被 Tk 吞掉 ⇒ 版本栏永远停在「（未检查）」；
+            #   · 紧随其后的 log 读到的还是旧值 ⇒ 日志"显示"旧版本，看着像已是最新。
+            self.root.after(0, lambda: self.remote_v.set("检查中…"))
+            self.log(f"正在检查最新版本（{len(version_sources())} 个入口并行竞速）…")
+            try:
+                v, src = remote_version_detail(self.proxy.get())
+            except Exception as e:                               # noqa: BLE001
+                self.root.after(0, lambda: self.remote_v.set("获取失败（见日志）"))
+                self.log(f"✘ 获取远端版本失败：{e}")
+                self.log(network_hint())
+                return                      # 就地消化，别让 _run_bg 再报一次
+            self.root.after(0, lambda: self.remote_v.set(v))
+            self.log(f"最新版本：{v}（来源：{src}）")
+            if v == local_version(ROOT):
+                self.log("已是最新版本，无需更新。")
+            else:
+                self.log(f"发现新版本（{local_version(ROOT)} → {v}），"
+                         "点「更新到最新版本」即可。")
         self._run_bg(job)
 
     def thread_update(self):
