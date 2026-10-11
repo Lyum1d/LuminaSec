@@ -585,6 +585,11 @@ async function removeProject(pid) {
 async function loadTools() {
   const d = await api('/api/tools?kind=all');
   state.tools = d.items;
+  // v106：把「为什么工具这么少」记下来，渲染时摆在清单最上面。
+  // 未配置工具箱时目录里只剩内置工具（httpreplay / py_exec / kb_* / code_* …），
+  // 使用者看到的是「工具全空」，而原因原本只存在于后端 registry.errors 里 ——
+  // 结果是只能翻日志或问人。这里把原因与配置方法直接显示出来。
+  state.toolboxNotice = (d.errors && d.errors.length) ? String(d.errors[0]) : '';
   renderTools();
 }
 
@@ -606,7 +611,12 @@ function renderTools() {
   const groups = {};
   items.forEach(t => (groups[t.category] = groups[t.category] || []).push(t));
 
-  $('toolList').innerHTML = Object.entries(groups).map(([cat, list]) => `
+  // 降级提示摆在最上面：让「工具少了」这件事自带解释，而不是让人以为程序坏了。
+  const notice = state.toolboxNotice
+    ? `<div class="tool-notice">⚠️ ${esc(state.toolboxNotice)}</div>`
+    : '';
+
+  $('toolList').innerHTML = notice + (Object.entries(groups).map(([cat, list]) => `
     <div class="tool-group">${esc(cat)} (${list.length})</div>
     ${list.map(t => {
       const badge = t.url
@@ -621,7 +631,7 @@ function renderTools() {
                 <span class="tname">${esc(t.name)}</span>${badge}
               </div>`;
     }).join('')}
-  `).join('') || '<div class="empty">无匹配工具</div>';
+  `).join('')) || (notice ? '' : '<div class="empty">无匹配工具</div>');
 }
 
 async function launchTool(alias) {

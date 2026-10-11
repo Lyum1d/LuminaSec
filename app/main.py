@@ -674,7 +674,13 @@ async def list_tools(kind: str = "all"):
         items = registry.web_tools()
     else:
         items = registry.tools
-    return {"items": [t.to_dict() for t in items], "count": len(items)}
+    # v106：把「为什么工具这么少」一并回传。
+    # 未配置工具箱时目录里只剩内置工具（executable 是 `builtin://…`），
+    # 界面上看着就是「工具全空」，而原因只存在于 registry.errors 里 ⇒
+    # 使用者只能翻日志或问人。这里把原因与配置方法直接交给前端展示。
+    return {"items": [t.to_dict() for t in items], "count": len(items),
+            "toolbox_configured": config.TOOLBOX_ROOT_SET,
+            "errors": list(registry.errors)}
 
 
 @app.post("/api/tools/launch/{alias}")

@@ -210,6 +210,19 @@ class ToolRegistry:
                 self.errors.append(config.TOOLBOX_ROOT_HELP)
             else:
                 self.errors.append(f"找不到工具清单：{tools_json}")
+            # ⚠️ v106 修（发布版实测暴露）：**先把内置工具注册上，再返回**。
+            #
+            # 内置工具的 executable 是 `builtin://…`，由 app/replayer.py 托管执行，
+            # **完全不依赖工具箱**（httpreplay / py_exec / kb_search / kb_read /
+            # note_fact / fofa_search / code_* …）。原先这一支直接 `return self`，
+            # 而 `_add_builtin_tools()` 写在函数末尾 ⇒ 「没配工具箱」的机器上工具清单是
+            # **空的**：不是少了那批外部工具，而是**一个工具都没有**，界面上全空。
+            #
+            # 为什么一直没暴露：开发机的工具箱都已配置（tools.json 存在），走的是正常分支；
+            # 只有**纯 clone / 新机器 / 发布版**才会走这里 —— 正是最该能用的场景。
+            self._add_builtin_tools()
+            # `loaded` 保持 False：它的语义是「**完整**清单已载入」。外部清单缺失是降级，
+            # 由 self.errors 说明原因；但内置能力已注册，功能不至于全瘫。
             return self
 
         raw = json.loads(tools_json.read_text(encoding="utf-8"))

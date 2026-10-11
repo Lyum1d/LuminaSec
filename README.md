@@ -165,6 +165,11 @@ ModuleNotFoundError: No module named 'uvicorn'」这类打不开的情况不会�
 3. 都没有 → 视为**未配置**：启动信息与 `/api/health` 会明确提示（`toolbox_configured: false`），
    工具清单会给出「未配置工具箱根目录」而不是含糊的「找不到工具清单」。
 
+> **未配置工具箱时不会「什么都没得用」**：内置能力（`httpreplay` / `py_exec` /
+> `kb_search` / `kb_read` / `note_fact` / `fofa_search` / `code_*` 等，共 19 个）
+> **不依赖工具箱**，照常可用；工具面板顶部会同时显示原因与配置方法。
+> 缺的只是那批需要工具箱本体的外部工具。白盒侧的代码审计功能（`code_*`）完全可用。
+
 ### 其他可手改的配置
 
 - `data/risk_grades.json` —— 工具风险分级（改完在控制台重载）；

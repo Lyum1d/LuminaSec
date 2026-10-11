@@ -195,6 +195,14 @@ button.icon-btn { font-size: 16px; padding: 6px 10px; line-height: 1; }
 .tool-search { padding: 9px 11px; border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
 .tool-group { font-size: 12px; color: var(--muted); margin: 11px 0 4px; font-weight: 600; }
 
+/* 工具箱降级提示（v106）：未配置工具箱根目录时，清单里只剩内置工具。
+   把原因摆在清单最上面 —— 否则使用者只会看到「工具全空」，以为程序坏了。 */
+.tool-notice {
+  margin: 10px 10px 4px; padding: 8px 10px; border-radius: 8px;
+  background: var(--accent-soft); color: var(--warn);
+  font-size: 12px; line-height: 1.5; word-break: break-word;
+}
+
 .side-foot { padding: 10px 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .side-foot button { width: 100%; text-align: left; }
 
