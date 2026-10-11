@@ -598,7 +598,10 @@ function renderTools() {
   const kind = $('toolKind').value;
   let items = state.tools.filter(t => {
     if (kind === 'web') return !!t.url;
-    if (kind === 'launchable') return !!t.exists && !t.url;
+    // v108：内置能力**不是**本地可启动的程序（它由 Agent 在任务执行时调用）。
+    // 原先这里只判 exists && !url，而内置能力的 exists 为真 ⇒ 它们被摆进
+    // "本地工具（点击启动）"，点一下就去 spawn 一个不存在的路径 → WinError 123。
+    if (kind === 'launchable') return !!t.exists && !t.url && !t.builtin;
     if (kind === 'scriptable') return !!t.scriptable;
     return true;
   });
@@ -619,15 +622,24 @@ function renderTools() {
   $('toolList').innerHTML = notice + (Object.entries(groups).map(([cat, list]) => `
     <div class="tool-group">${esc(cat)} (${list.length})</div>
     ${list.map(t => {
-      const badge = t.url
-        ? '<span class="badge">网页</span>'
-        : t.disabled
-          ? '<span class="badge off">已禁用</span>'
-          : t.scriptable
-            ? `<span class="badge ${t.risk_level}">${t.risk_level}</span>`
-            : '<span class="badge gui">GUI</span>';
-      const click = t.url ? `window.open('${t.url}')` : `launchTool('${t.alias}')`;
-      return `<div class="tool" onclick="${click}" title="${esc(t.path || t.url)}">
+      // v108：内置能力没有可启动的程序 ⇒ **不给点击交互**，改挂「内置」徽标 + 说明。
+      // 风险分级照旧显示（例如 Python代码执行 是 L3），只是不再假装它能"一键启动"。
+      const risk = t.scriptable ? `<span class="badge ${t.risk_level}">${t.risk_level}</span>` : '';
+      const badge = t.builtin
+        ? `<span class="badge builtin">内置</span>${risk}`
+        : t.url
+          ? '<span class="badge">网页</span>'
+          : t.disabled
+            ? '<span class="badge off">已禁用</span>'
+            : t.scriptable
+              ? risk
+              : '<span class="badge gui">GUI</span>';
+      const click = t.builtin ? '' : (t.url ? `window.open('${t.url}')` : `launchTool('${t.alias}')`);
+      const tip = t.builtin
+        ? `${t.name}（内置能力）：由 Agent 在任务执行时调用，不需要工具箱，也不能单独启动`
+        : (t.path || t.url);
+      return `<div class="tool${t.builtin ? ' tool-builtin' : ''}"${
+        click ? ` onclick="${click}"` : ''} title="${esc(tip)}">
                 <span class="tname">${esc(t.name)}</span>${badge}
               </div>`;
     }).join('')}

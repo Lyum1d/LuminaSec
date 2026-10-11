@@ -20,6 +20,13 @@ from typing import Any
 
 from . import config
 
+#: 内置能力的 executable 前缀。内置能力**不在磁盘上**：它们由 app/replayer.py
+#: 在本进程内托管执行（HTTP 重放 / 代码执行 / 知识库检索 / 白盒代码审计 / 元认知工具 …）。
+#: 凡是「能不能当本地程序启动」的判断都必须先看这个前缀 ——
+#: 内置工具的 `exists` 为真（表示"该能力可用"），只看 exists/executable 就会被
+#: 当成"磁盘上可启动的程序"拿去 spawn，结果是 WinError 123（文件名、目录名或卷标语法不正确）。
+BUILTIN_SCHEME = "builtin://"
+
 
 @dataclass
 class Tool:
@@ -58,6 +65,14 @@ class Tool:
     # v023.2 扫描器内部流量能力声明（来自 overrides 的 network_control）
     network_control: dict = field(default_factory=dict)
 
+    def is_builtin(self) -> bool:
+        """是不是内置能力（进程内托管，不是磁盘上的程序）。
+
+        界面必须靠它区分两类工具：内置能力**没有可单独启动的程序**，
+        给它一个「点击启动」的交互必然失败（v108 实测 WinError 123）。
+        """
+        return str(self.executable or "").startswith(BUILTIN_SCHEME)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -71,6 +86,9 @@ class Tool:
             "risk_reason": self.risk_reason,
             "scriptable": self.scriptable,
             "exists": bool(self.executable),
+            # v108：把「内置能力」显式告诉前端。前端原先靠 type == "内置" 这个中文串判断，
+            # 而它同时还要判断"能不能启动" —— 用中文字串当逻辑判据太脆（改个显示名就失效）。
+            "builtin": self.is_builtin(),
             "disabled": self.disabled,
             "disabled_reason": self.disabled_reason,
             "interactive": self.interactive,
@@ -781,8 +799,14 @@ class ToolRegistry:
         return [t for t in self.tools if t.scriptable]
 
     def launchable_tools(self) -> list[Tool]:
-        """能在工具箱面板一键启动的本地工具（不含网页与内置工具）。"""
-        return [t for t in self.tools if t.executable and t.type != "内置"]
+        """能在工具箱面板一键启动的本地工具（不含网页与内置能力）。
+
+        ⚠️ v108：内置能力**没有磁盘上的程序**（executable 是 `builtin://…`），
+        给它一个「一键启动」的交互必然失败（实测 WinError 123「文件名、目录名或卷标语法不正确」）。
+        这里与界面用同一判据 `is_builtin()` —— 原先界面自己写的是 `exists && !url`，
+        而内置能力的 `exists` 为真 ⇒ 它们被摆进了"本地工具（点击启动）"并绑定点击。
+        """
+        return [t for t in self.tools if t.executable and not t.is_builtin()]
 
     def web_tools(self) -> list[Tool]:
         return [t for t in self.tools if t.url]

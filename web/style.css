@@ -145,6 +145,10 @@ button.icon-btn { font-size: 16px; padding: 6px 10px; line-height: 1; }
 .badge.L3 { background: var(--accent-soft); color: var(--danger); }
 .badge.gui { background: var(--accent-soft); color: var(--accent2-text); }
 .badge.off { background: var(--panel-3); color: var(--muted); }
+/* v108：内置能力的徽标 —— 它不是磁盘上的程序，点击没有意义 */
+.badge.builtin { background: var(--accent-soft); color: var(--accent2-text); }
+/* 内置能力的条目不做可点击样式（没有 hover 反馈，光标改成默认箭头） */
+.tool.tool-builtin { cursor: default; }
 
 .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 22px 10px; }
 .muted { font-size: 12px; color: var(--muted); }

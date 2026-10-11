@@ -695,8 +695,23 @@ async def launch_tool(alias: str, confirm: bool = False):
     tool = registry.get_by_alias(alias)
     if not tool:
         raise HTTPException(404, f"工具不存在：{alias}")
+    # ⚠️ v108：内置能力**不能**在这里启动。它们的 executable 是 `builtin://…`
+    # （由 app/replayer.py 在本进程内托管执行），既不是磁盘上的程序、也没有可启动的入口。
+    # 原先只判 `executable` 是否非空 —— 内置能力的 exists 为真 ⇒ 通过校验，
+    # 然后被当成路径去 spawn，报 WinError 123「文件名、目录名或卷标语法不正确」，
+    # 而文案完全看不出原因（使用者只能来问）。
+    if tool.is_builtin():
+        raise HTTPException(400, (
+            f"「{tool.name}」是**内置能力**，它没有可以单独启动的程序："
+            "由 Agent 在任务执行时调用（也不需要工具箱）。"
+            "请在对话里派任务使用它，而不是在这里点击启动。"))
     if not tool.executable:
         raise HTTPException(400, f"该工具没有可执行文件（可能是网页工具）：{tool.name}")
+    # 文件缺失时给明确原因，而不是让 spawn 抛出 WinError
+    if not tool.exists:
+        raise HTTPException(400, (
+            f"工具文件不存在：{tool.name}。请确认已配置工具箱根目录（TOOLBOX_ROOT "
+            "或本机 config.yaml 的 toolboxRoot），且该工具在工具箱里确实存在。"))
     risk = registry.risk_of(tool.alias) or {}
     if not risk.get("auto", False) and not confirm:
         raise HTTPException(
