@@ -1,0 +1,6 @@
+{
+  "_说明": "授权域名白名单：同时约束 HTTP 重放器（app/replayer.py）与命令行工具（app/executor.py / app/pyexec.py）。命令行工具执行前强制校验（config.ENFORCE_SCOPE），目标不在白名单直接拒绝执行。新增授权目标时编辑此文件。",
+  "domains": [
+    "example.com"
+  ]
+}

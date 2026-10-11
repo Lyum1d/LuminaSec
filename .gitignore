@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 运行时数据库
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+*.sqlite
+
+# 运行产物（导出的报告等，含漏洞细节，严禁入库）
+data/artifacts/
+
+# 日志与运行输出
+*.log
+*.out
+
+# 测试 / 探测临时产物（不要入库）
+probe_result.txt
+*_test_log.txt
+api_auth_test_results.json
+*.tmp
+
+# 真机联调脚本（临时）：内部硬编码真实授权靶标，属交战数据，严禁入库。
+# 命名约定以 _live_ 开头，做一次性联调后即弃。
+_live_*.py
+
+# 实战驱动/优化原型脚本与审计日志（2026-09-22）。
+# 统一约定：项目根下以 `_` 开头的文件都是本机一次性工具（脚本/任务书/日志），
+# 内容会包含真实授权靶标与流量记录，属交战数据，严禁入库。
+/_*
+
+# 本机个人配置 / 密钥模板 / 运行时状态 / 备份（不要入库）
+config.yaml
+data/runtime.json
+*.bak
+
+# Python 代码执行通道留档（py_exec）
+# 每段执行过的代码按 data/scripts/exec/<目标域名>/exec_<时间戳>.py 留档，
+# 目录名本身即目标、代码内可能含 payload/凭据。仓库为 public，必须排除。
+data/scripts/
+
+# 更新工具产物
+update.exe
+update_backup_*/
+update_state.json
+build/
+update.spec
+
+# ---- 审计 P0-4：敏感数据不得入库（2026-09-16）----
+# scope.json 本机含真实授权靶标，已移出版本控制（模板见 data/scope.example.json）
+data/scope.json
+# 控制台配置变更审计（v050）：会记录真实授权 host，入库即公开泄露
+data/console_audit.jsonl
+# 控制台写入前的配置备份（同样含真实 host）
+data/console_backups/
+# 控制台写入的本机运行参数覆盖（本机调优值，不该跟着仓库走）
+data/runtime_overrides.json
+# 损坏库备份与历史 .git 存档含真实交战数据
+data/*corrupt*
+data/*.bak_*
+.git_broken*/
+
+# 审计/排障临时目录（本机一次性产物，含测试 DB 与权限还原记录，不要入库）
+/.audit-tmp/
+/.acl-recovery/
+
+# 外部审计报告（v053）：属审计方产物，不是项目交付物；且含真实域名与内部细节，
+# 不该随公开仓库发布。保留在本机工作区供查阅。
+审计报告.md
+053_审计核实回复.md
+
+# 规划/战略文档（v057 起）：方向路线图与实施规格，属**本机规划材料**，不是项目交付物。
+# 与 审计报告.md / 053_审计核实回复.md 同一类：放在仓库根且未忽略时，
+# `git add -A` 会把它们推上公开仓库。如决定公开，把下面几行删掉即可。
+白盒审计_实施规格.md
+其余方向与总路线图.md
+二进制方向_更新方向与计划.md
+
+# 白盒 codebase 授权记录（v058）：记录本机代码根路径与审计对象，
+# 与 data/scope.json 同级敏感 —— 严禁入库。
+data/codebases.json
+
+# 白盒入库落盘的代码（v059）：这是**被测目标的源码**，不是本项目资产 —— 严禁入库
+data/codebases/
+
+# 白盒索引产物（v060）：含**被测代码里的字符串**（可能就有硬编码密钥）——
+# 与入库代码同级敏感，严禁入库。
+data/codebases_index/
+
+# 真实项目的召回用例（v067）：含**本机检出目录的绝对路径**（带用户名）——
+# 与 data/scope.json / data/codebases.json 同级敏感，严禁入库。
+# 机制入的是 data/recall_real.json.example（模板，无本机路径）。
+data/recall_real.json
+
+# 批量基准评测集配置（v070）：同样含**本机检出目录的绝对路径**，同理 gitignore。
+# 机制入的是 data/recall_batch.json.example（模板，无本机路径）。
+data/recall_batch.json

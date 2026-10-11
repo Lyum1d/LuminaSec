@@ -1,0 +1,180 @@
+{
+  "_说明": "工具调用模板。{exe}=可执行文件绝对路径，{target}=目标，{args}=模型给出的附加参数。target 字段声明该工具期望的目标格式，执行前会自动归一化：url=补全 https:// ；host=去掉 scheme 与路径 ；domain=去掉 scheme、www 与路径 ；raw=原样传入。未配置 target 的工具默认 raw。未配置模板的工具默认使用 {exe} {args} {target}。",
+  "_target_form": "url=必须带 scheme；host=去掉 scheme 与路径；domain=去掉 scheme/路径/www.；asis=原样透传。",
+  "enscan": {
+    "cmd": "{exe} -n {target} {args}",
+    "target": "raw"
+  },
+  "oneforall": {
+    "cmd": "{exe} --target {target} run {args}",
+    "target": "domain"
+  },
+  "httpx": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "ehole": {
+    "cmd": "{exe} finger -u {target} {args}",
+    "target": "url"
+  },
+  "veo_finger": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "packerfuzzer": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "rscan": {
+    "cmd": "{exe} scan -u {target} {args}",
+    "target": "url"
+  },
+  "dirsearch": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "sqlmap": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "sqlmap_gui": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "afrog": {
+    "cmd": "{exe} -t {target} {args}",
+    "target": "url"
+  },
+  "fscan": {
+    "cmd": "{exe} -h {target} {args}",
+    "target": "host"
+  },
+  "kscan": {
+    "cmd": "{exe} -t {target} {args}",
+    "target": "host"
+  },
+  "dddd_scan": {
+    "cmd": "{exe} -t {target} {args}",
+    "target": "host"
+  },
+  "sharpscan": {
+    "cmd": "{exe} -h {target} {args}",
+    "target": "host"
+  },
+  "springboot_scan": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "heartsk": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "goon": {
+    "cmd": "{exe} -t {target} {args}",
+    "target": "host"
+  },
+  "fastjson_exp": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "nacos_exploit": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "iwannagetall": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "equation_kit": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "vcenter_kit": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "neo_regeorg": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "wexploit": {
+    "cmd": "{exe} -u {target} {args}",
+    "target": "url"
+  },
+  "xg_webshell": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "bypass_av": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "heapdump_decrypt": {
+    "cmd": "{exe} {target} {args}",
+    "target": "raw"
+  },
+  "md5_tool": {
+    "cmd": "{exe} {target} {args}",
+    "target": "raw"
+  },
+  "app_info": {
+    "cmd": "{exe} {target} {args}",
+    "target": "raw"
+  },
+  "golin_compliance": {
+    "cmd": "{exe} {args} {target}",
+    "target": "host"
+  },
+  "ad_domain_assess": {
+    "cmd": "{exe} {args} {target}",
+    "target": "host"
+  },
+  "goexec": {
+    "cmd": "{exe} {args} {target}",
+    "target": "host"
+  },
+  "linux_privesc": {
+    "cmd": "{exe} {args} {target}",
+    "target": "host"
+  },
+  "aksk_exploit": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "aksk_post_exploit": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "jndi_exploit": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "frp_tunnel": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "deepseek_tool": {
+    "cmd": "{exe} {target} {args}",
+    "target": "raw"
+  },
+  "mimikatz": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "cobaltstrike": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "godzilla": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "godzilla_special": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  },
+  "behinder4": {
+    "cmd": "{exe} {args}",
+    "target": "raw"
+  }
+}

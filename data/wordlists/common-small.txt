@@ -1,0 +1,73 @@
+# 轻量目录扫描小字典（src-agent 内置）
+#
+# 用途：补天公益 SRC「敏感目录扫描」场景下的小规模路径探测。
+# 设计约束（按合规纪律）：
+#   1. 条数少（~60 条），单轮扫描可控，不构成"高频遍历"；
+#   2. **敏感后缀与普通路径交错排布**——同类敏感后缀最长连续不超过 2 条，
+#      避免"敏感后缀连发"触发 IPS 封禁源 IP（test_039 B5 有断言守着）；
+#   3. 只放**通用敏感路径**（后台/配置/备份/上传/接口文档），不放业务路径。
+#
+# 用法（dirsearch）：
+#   -w "data\wordlists\common-small.txt"
+#   -t 1 --delay 1 --max-time 180 -i 200,301,302,403
+#
+# 注意：不要把本文件路径替换成 py_exec 会话目录下的临时文件 —— dirsearch 与 py_exec
+# 是两套执行环境，且临时文件会被清理，历史上因此报过 "wordlist does not exist"。
+
+admin
+backup.zip
+manage
+manager
+login
+system
+www.zip
+console
+api
+api/v1
+database.sql
+doc.html
+swagger-ui.html
+v2/api-docs
+v3/api-docs
+actuator
+actuator/health
+bak
+actuator/env
+druid
+config
+conf
+index.php.bak
+upload
+uploads
+files
+temp
+test
+demo
+dev
+robots.txt
+sitemap.xml
+.env
+phpinfo.php
+info.php
+README.md
+web.zip
+userfiles
+attachment
+data
+logs
+debug
+status
+health
+metrics
+error
+crossdomain.xml
+CHANGELOG.md
+wwwroot
+static
+assets
+public
+web.config
+index.php
+test.php
+admin/login
+api/docs

@@ -1,0 +1,7 @@
+# 密钥模板：复制本文件为 config.yaml 后填入真实 Key。
+# 注意：config.yaml 已加入 .gitignore，不会被提交，请勿把真实 Key 写进本文件。
+ceyeApi: ""
+ceyeDomain: ""
+fofaEmail: ""
+fofaKey: ""
+fofaSize: 100

@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn>=0.27
+httpx>=0.27
+# FOFA 测绘读本机 config.yaml 用（缺失时 app/fofa.py 会退化为内置极简解析，功能不中断）
+pyyaml>=6.0

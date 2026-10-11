@@ -1,0 +1,102 @@
+{
+  "_说明": [
+    "本机真实项目的白盒召回用例（模板）。",
+    "用法：复制成 data/recall_real.json 并把 dir 改成你本机检出目录的绝对路径。",
+    "为什么本机路径不直接写在代码里：它是本机信息（带用户名），进公开仓库既泄露信息、",
+    "又会触发本项目 v056 的隐私护栏。所以机制入库、路径入本机（与 data/scope.json 同约定）。",
+    "",
+    "★ 写期望的三条纪律：",
+    "① expect_loc 必须**来自工具输出**（先跑 code_search，看工具实际命中的行号），不要凭记忆写；",
+    "② 期望要按 **sink 在哪** 写，**不能按文件名写** —— DVWA 把输入与 sink 拆在两个文件里：",
+    "   fi 的 sink 在 vulnerabilities/fi/index.php，而 vulnerabilities/fi/source/low.php 里",
+    "   只有输入采集、根本没有 sink。整个项目这样的例子很多。",
+    "③ 负样本**必须写 forbid_in**（文件范围）：整个仓库别处当然会命中这些规则，",
+    "   不限定范围的话真实项目的负样本永远会「失败」，等于没测。",
+    "",
+    "★ DVWA 自带现成的负样本：每个模块都有 source/impossible.php（**安全实现版**）——",
+    "   那正是「应该命中不了」的 ground truth，比手工编负样本更可信。"
+  ],
+  "cases": [
+    {
+      "id": "dvwa-fi-lfi",
+      "dir": "<本机 DVWA 检出目录，例如 E:/src/DVWA>",
+      "kind": "positive",
+      "lang": "php",
+      "expect_loc": ["vulnerabilities/fi/index.php:36"],
+      "expect_rules": ["php.rce.include"],
+      "note": "文件包含：sink 在 index.php，不在 source/low.php（输入与 sink 分离）"
+    },
+    {
+      "id": "dvwa-sqli-low",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "positive",
+      "lang": "php",
+      "expect_loc": ["vulnerabilities/sqli/source/low.php:11"],
+      "expect_rules": ["php.sqli.concat"],
+      "note": "SQL 注入：第 10 行拼串、第 11 行执行"
+    },
+    {
+      "id": "dvwa-exec-low",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "positive",
+      "lang": "php",
+      "expect_loc": ["vulnerabilities/exec/source/low.php:10"],
+      "expect_rules": ["php.rce.shell"],
+      "note": "命令执行"
+    },
+    {
+      "id": "dvwa-brute-low",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "positive",
+      "lang": "php",
+      "expect_loc": ["vulnerabilities/brute/source/low.php:13"],
+      "expect_rules": ["php.sqli.concat"],
+      "note": "暴力破解模块里的 SQL 查询"
+    },
+    {
+      "id": "dvwa-upload-low",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "positive",
+      "lang": "php",
+      "expect_loc": ["vulnerabilities/upload/source/low.php:6"],
+      "expect_rules": ["php.path.file_ops"],
+      "note": "文件上传（未校验）"
+    },
+    {
+      "id": "dvwa-xssr-low",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "positive",
+      "lang": "php",
+      "expect_loc": ["vulnerabilities/xss_r/source/low.php:8"],
+      "expect_rules": ["php.xss.superglobal_to_html"],
+      "note": "反射型 XSS：第 8 行把 $_GET 拼进 HTML（先拼变量、之后才输出）"
+    },
+    {
+      "id": "dvwa-sqli-impossible",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "negative",
+      "lang": "php",
+      "forbid_rules": ["php.sqli.concat"],
+      "forbid_in": "vulnerabilities/sqli/source/impossible.php",
+      "note": "DVWA 的安全实现版（预处理/校验）—— 不该被判注入"
+    },
+    {
+      "id": "dvwa-xssr-impossible",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "negative",
+      "lang": "php",
+      "forbid_rules": ["php.xss.echo_var", "php.xss.superglobal_to_html"],
+      "forbid_in": "vulnerabilities/xss_r/source/impossible.php",
+      "note": "安全版用了转义 —— 不该被判 XSS"
+    },
+    {
+      "id": "dvwa-fi-impossible",
+      "dir": "<本机 DVWA 检出目录>",
+      "kind": "negative",
+      "lang": "php",
+      "forbid_rules": ["php.rce.include"],
+      "forbid_in": "vulnerabilities/fi/source/impossible.php",
+      "note": "安全版用了白名单 —— 不该被判文件包含"
+    }
+  ]
+}

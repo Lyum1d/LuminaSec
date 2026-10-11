@@ -1,0 +1,352 @@
+{
+  "OneForALL": {
+    "level": "L0",
+    "type": "Python",
+    "category": "信息收集工具",
+    "path": "/tools/gui_shouji/oneforall/oneforall.py",
+    "reason": "子域名收集，基于公开数据源与 DNS 查询"
+  },
+  "ENScan": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_other/enscan/enscan-v2.0.4-windows-amd64.exe",
+    "reason": "公开情报与企业资产查询，纯读取"
+  },
+  "APP信息收集工具探测工具": {
+    "level": "L0",
+    "type": "Python",
+    "category": "信息收集工具",
+    "path": "/tools/gui_scan/appinfo/app.py",
+    "reason": "APP 静态信息提取，不触达目标"
+  },
+  "GOlin等保核查工具": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_shouji/golin/golin.exe",
+    "reason": "合规性配置核查，只读探测"
+  },
+  "Httpx辅助工具": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_scan/fcke/httpx.exe",
+    "reason": "HTTP 存活与标题探测，只读请求"
+  },
+  "杂项加密解密小工具(MD5版)": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "其他工具",
+    "path": "/tools/gui_scan/md5/MD5.exe",
+    "reason": "本地哈希计算，不触达目标"
+  },
+  "Ehole指纹识别工具魔改版": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_scan/ehole/EHole_windows_amd64.exe",
+    "reason": "WEB 指纹识别，只读"
+  },
+  "heapdump解密工具": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "框架漏洞利用工具",
+    "path": "/tools/gui_scan/heapdump/start1.bat",
+    "reason": "对已获取的本地文件做分析，不触达目标"
+  },
+  "TideFinger指纹识别工具": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_shouji/tide/TideFinger_windows_amd64_v3.2.3.exe",
+    "reason": "指纹识别，只读"
+  },
+  "DeepSeekSelfTools": {
+    "level": "L0",
+    "type": "Python",
+    "category": "其他工具",
+    "path": "/tools/gui_other/deepseekselftool/DeepSeekSelfTool.py",
+    "reason": "查询辅助脚本，不触达目标"
+  },
+  "P1finger指纹识别": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_scan/P1finger/P1finger64.exe",
+    "reason": "指纹识别，只读"
+  },
+  "Frp": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "抓包与代理工具",
+    "path": "/tools/gui_other/frp/Frpc-Desktop-1.2.4-win/Frpc-Desktop.exe",
+    "reason": "隧道客户端，仅在已有权限后建立通道"
+  },
+  "VEO指纹识别工具": {
+    "level": "L0",
+    "type": "命令行",
+    "category": "信息收集工具",
+    "path": "/tools/gui_other/veo/veo.exe",
+    "reason": "指纹识别，只读"
+  },
+  "WebPack信息探测工具": {
+    "level": "L1",
+    "type": "Python",
+    "category": "信息收集工具",
+    "path": "/tools/gui_scan/webpackscan/PackerFuzzer.py",
+    "reason": "PackerFuzzer，对目标前端资源做批量请求"
+  },
+  "DirSearch目录探测工具": {
+    "level": "L1",
+    "type": "Python",
+    "category": "信息收集工具",
+    "path": "/tools/gui_scan/dirsearch/dirsearch.py",
+    "reason": "目录爆破，产生较多请求但无破坏性"
+  },
+  "Afrog可定制化漏洞扫描工具": {
+    "level": "L1",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_other/afrog/afrog.exe",
+    "reason": "PoC 扫描，属检测性质"
+  },
+  "nuclei漏洞扫描器": {
+    "level": "L1",
+    "type": "JAVA11",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/nuclei/nuclei-7.4.8.jar",
+    "reason": "模板化漏洞扫描，属检测性质"
+  },
+  "SpringBoot-Scan": {
+    "level": "L1",
+    "type": "Python",
+    "category": "框架漏洞利用工具",
+    "path": "/tools/gui_scan/spring/SpringBoot-Scan.py",
+    "reason": "Spring Boot 风险检测"
+  },
+  "Xscan": {
+    "level": "L1",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/xscan/xscan.exe",
+    "reason": "综合扫描，检测性质"
+  },
+  "EZ扫描检测工具": {
+    "level": "L1",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/ez/ez.exe",
+    "reason": "扫描检测性质"
+  },
+  "Serein": {
+    "level": "L1",
+    "type": "Python",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/serein/Serein.py",
+    "reason": "辅助检测脚本"
+  },
+  "DDDD漏扫工具": {
+    "level": "L1",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/dddd/dddd2.exe",
+    "reason": "漏洞扫描，检测性质"
+  },
+  "Rscan": {
+    "level": "L1",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/Rscan/Rscan_win64.exe",
+    "reason": "扫描检测性质"
+  },
+  "SharpScan": {
+    "level": "L1",
+    "type": "命令行",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/sharpscan/SharpScan.exe",
+    "reason": "内网扫描探测，只读为主"
+  },
+  "SQLMAP X Plus": {
+    "level": "L2",
+    "type": "Python",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/sqlmap/sqlmap.py",
+    "reason": "SQL 注入会读取/导出数据库内容，属数据获取"
+  },
+  "XG拟态WEBSHELL免杀工具": {
+    "level": "L2",
+    "type": "JAVA8",
+    "category": "免杀工具",
+    "path": "/tools/gui_other/XG_NTAI_V2/XG_NTAI.jar",
+    "reason": "生成 WebShell，落地即改变目标状态"
+  },
+  "Fastjson检测利用工具": {
+    "level": "L2",
+    "type": "命令行",
+    "category": "框架漏洞利用工具",
+    "path": "/tools/gui_scan/json/JsonExp.exe",
+    "reason": "反序列化利用，可在目标执行命令"
+  },
+  "HeavenlyBypassAV": {
+    "level": "L2",
+    "type": "命令行",
+    "category": "免杀工具",
+    "path": "/tools/gui_other/rqed/Heavenly.exe",
+    "reason": "免杀处理，产物用于落地执行"
+  },
+  "WExploit漏洞利用工具": {
+    "level": "L2",
+    "type": "批处理",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/wy876/run.vbs",
+    "reason": "涉及利用，默认需确认"
+  },
+  "SQLMAP-GUI": {
+    "level": "L2",
+    "type": "Python",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/sqlmap/GUI-sqlmap/sqlmap_v1.3.2.jar",
+    "reason": "涉及利用，默认需确认"
+  },
+  "哥斯拉": {
+    "level": "L3",
+    "type": "JAVA8",
+    "category": "WebShell管理工具",
+    "path": "/tools/gui_webshell/Godzilla/godzilla.jar",
+    "reason": "WebShell 管理，属权限维持"
+  },
+  "哥斯拉特战版": {
+    "level": "L3",
+    "type": "JAVA8",
+    "category": "WebShell管理工具",
+    "path": "/tools/gui_webshell/Godzilla/tz/哥斯拉特战版.jar",
+    "reason": "WebShell 管理，属权限维持"
+  },
+  "冰蝎4": {
+    "level": "L3",
+    "type": "JAVA11",
+    "category": "WebShell管理工具",
+    "path": "/tools/gui_webshell/Behinder4/Behinder.jar",
+    "reason": "WebShell 管理，属权限维持"
+  },
+  "CobaltStrike 4.7": {
+    "level": "L3",
+    "type": "JAVA8",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/Cobalt_Strike_4.7/cobaltstrike-client.jar",
+    "reason": "C2 控制框架，属完整后渗透"
+  },
+  "Linux一键维权探测工具": {
+    "level": "L3",
+    "type": "Python",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/tiquan/main.py",
+    "reason": "提权探测，涉及权限提升"
+  },
+  "AD域自动化评估工具": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/adyu/nxc.exe",
+    "reason": "域内横向与凭据操作"
+  },
+  "Vcenter综合渗适利用工具包": {
+    "level": "L3",
+    "type": "Python",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/vcenterKit/VcenterKit_PyQt6.py",
+    "reason": "虚拟化平台利用，影响面大"
+  },
+  "方程式工具包": {
+    "level": "L3",
+    "type": "JAVA11",
+    "category": "后渗透工具",
+    "path": "/tools/gui_scan/yongheng/方程式工具包图形界面版V0.51.jar",
+    "reason": "永恒系列漏洞，可获取系统权限"
+  },
+  "Fscan_V2.0": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/fscan/fscan.exe",
+    "reason": "含服务弱口令爆破与漏洞利用，会尝试登录"
+  },
+  "Kscan-1.85稳定版": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_other/kscan/kscan_windows_amd64.exe",
+    "reason": "含爆破模块，会尝试凭据"
+  },
+  "棱镜X单兵作战系统": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/heartsk/HeartsK.exe",
+    "reason": "综合利用系统，含利用与后渗透"
+  },
+  "goon扫描探测爆破工具集": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_shouji/goon/goon3_win_amd64.exe",
+    "reason": "明确含爆破能力"
+  },
+  "Mimikatz": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/mimikatz/mimikatz.exe",
+    "reason": "凭据提取，直接获取明文密码与票据"
+  },
+  "IWannaGetAll": {
+    "level": "L3",
+    "type": "JAVA8",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/apt/IWannaGetAll-vFinal.jar",
+    "reason": "多产品漏洞综合检测利用"
+  },
+  "AK SK利用工具": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/aksk/start.bat",
+    "reason": "云资产接管，影响面大"
+  },
+  "CF利用工具": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/cf/cf.exe",
+    "reason": "云凭据后续利用"
+  },
+  "Nacos综合利用工具": {
+    "level": "L3",
+    "type": "JAVA8",
+    "category": "漏洞扫描与利用工具",
+    "path": "/tools/gui_scan/nacos/nacos-exploit-3.0.5-jar-with-dependencies.jar",
+    "reason": "含命令执行与权限操作"
+  },
+  "JNDI利用工具": {
+    "level": "L3",
+    "type": "批处理",
+    "category": "框架漏洞利用工具",
+    "path": "/tools/gui_scan/jndi/start1.bat",
+    "reason": "起 LDAP/RMI 服务端触发目标反序列化"
+  },
+  "Neo-reGeorg": {
+    "level": "L3",
+    "type": "Python",
+    "category": "抓包与代理工具",
+    "path": "/tools/gui_other/Neo-reGeorg/neoreg.py",
+    "reason": "通过 WebShell 建立内网隧道，改变网络拓扑"
+  },
+  "GoExec": {
+    "level": "L3",
+    "type": "命令行",
+    "category": "后渗透工具",
+    "path": "/tools/gui_other/goexec/goexec_v0.3.0_windows_amd64/goexec.exe",
+    "reason": "内网远程命令执行"
+  }
+}

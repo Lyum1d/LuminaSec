@@ -1,0 +1,22 @@
+# 文本文件统一按 LF 存储与检出（v053 加）
+#
+# 为什么需要它：本机 core.autocrlf=true，而仓库里所有 blob 都是 LF。
+# 两者叠加的后果是 git 认为「工作区该给我 CRLF」，于是 `git status` **永久**显示
+# 6 个文件已修改 —— 但 `git diff` 是空的（实测 `git diff --quiet` 退出码 0、
+# `git diff` 输出 0 行），**内容零差异**。这种"看起来脏、其实干净"的常驻噪声很误导：
+# 提交前逐条核对时得反复确认这几行是不是真改动。
+#
+# 显式声明 eol=lf 后，git 不再期待 CRLF，status 恢复干净；且**内容不会变**
+# （已核验：203 个已跟踪 blob 全部是 LF、零 CRLF）。
+# 下面的 *.bat/*.cmd/*.ps1 规则必须放在本行之后 —— git 以**最后**匹配到的规则为准。
+* text=auto eol=lf
+
+# 换行符规则（重要：不要删）
+#
+# Windows 批处理必须使用 CRLF。cmd.exe 解析 LF 换行的批处理时，遇到多字节字符
+# （中文注释/提示）会算错行偏移、把脚本切碎执行，表现为双击后满屏
+# 「'xx' 不是内部或外部命令」，启动脚本彻底不可用。
+# 同时 .bat/.cmd 内容请保持纯 ASCII，中文提示交给 Python 端输出。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -1,0 +1,328 @@
+{
+  "_说明": "实测不可用或行为异常的工具。disabled=true 的工具不会进入 Agent 的工具清单，但仍可在工具箱面板手动启动。确认可用后把 disabled 改为 false 即可。timeout=单工具总时长覆写（秒），caveat=写进给模型的注意事项。 【v048 新增 caps：能力标签（供任务级约束闸门用）】数组，取值见 app/taskguard.py 的 CAP_*。作用：任务书里显式声明禁令（如「不做字典爆破」）时，凡带对应标签的工具**一律拒绝执行**。为什么用显式声明而不是按工具名/描述猜：那会双向出错 —— `goon` 名字里有「爆破」好办，`fscan` 名字里没有却同样是扫描器；反向也会误伤（名字含「扫描」但只是单发指纹探测的工具）。现有标签：`bruteforce`=字典爆破/枚举（子域、目录、口令）、`scan`=主动批量扫描。**新增标签必须同时在 taskguard.CAP_LABEL 里登记**，否则守卫测试会红。【v047 新增 interactive：交互式菜单程序】标 interactive=true 的工具**不会进入模型的工具清单**（usable_scriptable / build_schemas 双双剔除），但仍可在工具箱面板人工启动；模型若仍点名它，会收到一句明确的「这是交互式程序，请改用 X」而不是白烧一步 + 120 秒。判定标准：启动后打印菜单并等待 stdin，无法用一次调用拿到完整结果。interactive_reason 写清「为什么要标它」（必填，否则后来人无从复核）。target_type=target 形态声明（url=完整URL / domain=裸域名 / host=域名或IP），形态不符会被执行器拒绝并提示模型；disallowed_flags=明确禁止的旗标黑名单（执行时连同取值一起剔除，无论 allowed_flags 是否启用）。 【v023.2 新增 network_control：扫描器内部速率/并发能力声明】本字段用于流量安全治理：未声明（或 declared=false）的工具在启动前会被提示「流量不可观测」——其内部请求量调度器无法逐条统计，只能限制启动次数；环境变量 AGENT_SCANNER_REQUIRE_DECLARATION=1 时未声明者直接拒绝自动运行（严格模式）。声明格式：\"network_control\": {\"declared\": true, \"supports_rate\": true, \"supports_concurrency\": true, \"rate_flags\": [\"-rate-limit\"], \"concurrency_flags\": [\"-t\"], \"traffic_class\": \"high\"}。字段含义：declared=是否已核实该工具的流量控制能力；rate_flags=控制每秒请求数的旗标（未在 args 中出现时系统注入 AGENT_SCANNER_DEFAULT_RATE，默认 5）；concurrency_flags=控制并发线程数的旗标（注入 AGENT_SCANNER_DEFAULT_THREADS，默认 2）；traffic_class=low|medium|high|unknown 流量量级标注（供审计）。注意：注入的旗标若不在该工具 allowed_flags 白名单中会被参数清洗剔除——声明 rate_flags/concurrency_flags 时请同步把这些旗标加入 allowed_flags。**声明前请对照工具实际 --help 核对旗标名**，写错会导致工具报错退出。",
+  "enscan": {
+    "disabled": true,
+    "timeout": 90,
+    "reason": "爱企查数据源强制人机验证，自动调用必然失败；实测 www.example.com 时连续重试刷屏，且模型会忽略注意事项反复调用。需人工在浏览器过验证码后才可用，届时把 disabled 改为 false。"
+  },
+  "ehole": {
+    "disabled": false,
+    "ignore_exit_code": true,
+    "timeout": 120,
+    "caveat": "必须传完整 URL（带 https://），传裸域名会静默返回空。注意：退出码 1 不代表失败，只是没命中 OA/VPN 等『重点资产』，指纹仍会正常打印——只要有输出就按成功解读。注意：本工具**不支持 `--random-agent`**（会被自身参数解析拒绝，报未知参数）；常用参数为 `-u <完整URL>`。【参数坑·v039】① **不支持 `-timeout`**（实测会把 `imeout` 当成 `-t` 的值，报 strconv 解析错并整次调用报废）；② **多个 `-u` 只回传 1 条结果** —— 想批量识别请**分开逐次调用**，每次一个 `-u`；③ 限并发用 `-t <数字>`（线程数，默认 100，建议 5）。",
+    "target_type": "url",
+    "network_control": {
+      "declared": true,
+      "supports_rate": false,
+      "supports_concurrency": false,
+      "rate_flags": [],
+      "concurrency_flags": [],
+      "traffic_class": "low"
+    }
+  },
+  "dirsearch": {
+    "caveat": "target 由系统自动以 -u 注入，不要在 args 里重复写 -u（重复会导致崩溃）。不要臆造本工具不支持的旗标（如 --depth 会触发 'no such option' 报错退出）；如需限定扩展名请用 -e（例如 -e php,html）。【字典用法·v039】本工具的默认字典在**工具箱自己的目录**里（E:\\...\\tools\\gui_scan\\dirsearch\\db\\），而 py_exec 的会话目录与它是**两套执行环境**，历史上有过传 py_exec 落盘字典报 'wordlist does not exist' 的实测失败。**推荐做法**：① 用平台内置小字典，传绝对路径 `-w \\\"data\\\\wordlists\\\\common-small.txt\\\"`（约 60 条，敏感后缀已分散排布）；② 或不传 -w 用其自带字典（但条数多、耗时不可控）。**低配额目标建议改用 py_exec + safe_http_request 逐点探测**（串行、配额精确、每步可解释）。",
+    "allowed_flags": [
+      "--url",
+      "--bypass",
+      "--jsfind",
+      "--zwsb",
+      "--url-file",
+      "--stdin",
+      "--cidr",
+      "--raw",
+      "--session",
+      "--config",
+      "--wordlists",
+      "--extensions",
+      "--force-extensions",
+      "--overwrite-extensions",
+      "--exclude-extensions",
+      "--remove-extensions",
+      "--prefixes",
+      "--suffixes",
+      "--uppercase",
+      "--lowercase",
+      "--capital",
+      "--threads",
+      "--recursive",
+      "--deep-recursive",
+      "--force-recursive",
+      "--max-recursion-depth",
+      "--recursion-status",
+      "--subdirs",
+      "--exclude-subdirs",
+      "--include-status",
+      "--exclude-status",
+      "--exclude-sizes",
+      "--exclude-text",
+      "--exclude-regex",
+      "--exclude-redirect",
+      "--exclude-response",
+      "--skip-on-status",
+      "--min-response-size",
+      "--max-response-size",
+      "--max-time",
+      "--exit-on-error",
+      "--http-method",
+      "--data",
+      "--data-file",
+      "--header",
+      "--header-file",
+      "--follow-redirects",
+      "--random-agent",
+      "--auth",
+      "--auth-type",
+      "--cert-file",
+      "--key-file",
+      "--user-agent",
+      "--cookie",
+      "--timeout",
+      "--delay",
+      "--proxy",
+      "--proxy-file",
+      "--proxy-auth",
+      "--replay-proxy",
+      "--tor",
+      "--scheme",
+      "--max-rate",
+      "--retries",
+      "--ip",
+      "--crawl",
+      "--full-url",
+      "--redirects-history",
+      "--no-color",
+      "--quiet-mode",
+      "--output",
+      "--format",
+      "--log",
+      "-u",
+      "-b",
+      "-j",
+      "-z",
+      "-l",
+      "-s",
+      "-w",
+      "-e",
+      "-f",
+      "-O",
+      "-U",
+      "-L",
+      "-C",
+      "-t",
+      "-r",
+      "-R",
+      "-i",
+      "-x",
+      "-m",
+      "-d",
+      "-H",
+      "-F",
+      "-q",
+      "-o"
+    ],
+    "value_flags": [
+      "--url",
+      "--bypass",
+      "--jsfind",
+      "--zwsb",
+      "--url-file",
+      "--cidr",
+      "--raw",
+      "--session",
+      "--config",
+      "--wordlists",
+      "--extensions",
+      "--exclude-extensions",
+      "--prefixes",
+      "--suffixes",
+      "--threads",
+      "--max-recursion-depth",
+      "--recursion-status",
+      "--subdirs",
+      "--exclude-subdirs",
+      "--include-status",
+      "--exclude-status",
+      "--exclude-sizes",
+      "--exclude-text",
+      "--exclude-regex",
+      "--exclude-redirect",
+      "--exclude-response",
+      "--skip-on-status",
+      "--min-response-size",
+      "--max-response-size",
+      "--max-time",
+      "--http-method",
+      "--data",
+      "--data-file",
+      "--header",
+      "--header-file",
+      "--auth",
+      "--auth-type",
+      "--cert-file",
+      "--key-file",
+      "--user-agent",
+      "--cookie",
+      "--timeout",
+      "--delay",
+      "--proxy",
+      "--proxy-file",
+      "--proxy-auth",
+      "--replay-proxy",
+      "--scheme",
+      "--max-rate",
+      "--retries",
+      "--ip",
+      "--output",
+      "--format",
+      "--log",
+      "-u",
+      "-b",
+      "-j",
+      "-z",
+      "-l",
+      "-s",
+      "-w",
+      "-e",
+      "-t",
+      "-R",
+      "-i",
+      "-x",
+      "-m",
+      "-d",
+      "-H",
+      "-o"
+    ],
+    "target_type": "url",
+    "network_control": {
+      "declared": true,
+      "supports_rate": true,
+      "supports_concurrency": true,
+      "rate_flags": [
+        "--max-rate"
+      ],
+      "concurrency_flags": [
+        "-t"
+      ],
+      "traffic_class": "medium"
+    },
+    "_v038说明": "补天公益 SRC 明确允许「敏感目录扫描」为轻量测试。dirsearch 本身是 L1（目录探测、无破坏性），此前缺 network_control 声明会带「速率未声明」警告运行，容易让模型误判为越界而不跑 —— 这里补齐：限速用 --max-rate、并发用 -t。",
+    "caps": [
+      "bruteforce",
+      "scan"
+    ]
+  },
+  "tidefinger": {
+    "disabled": true,
+    "reason": "工具已过期（Expired: 2026.03.01），启动即提示获取最新版"
+  },
+  "nuclei": {
+    "disabled": true,
+    "reason": "nuclei-7.4.8.jar 是图形界面封装，命令行调用无输出、会卡住"
+  },
+  "serein": {
+    "disabled": true,
+    "reason": "--help 无响应（超时），疑似交互式或图形界面程序，无法取回输出"
+  },
+  "xscan": {
+    "disabled": true,
+    "reason": "v3.4 启动即提示『请下载新版xscan』，无法使用"
+  },
+  "p1finger": {
+    "disabled": true,
+    "reason": "子命令 finger 仅用于查询指纹库，实际扫描入口为 rule/fofa，参数待确认"
+  },
+  "ez_scan": {
+    "disabled": true,
+    "reason": "启动仅输出免责声明与 banner，未发现可用扫描参数，需人工确认"
+  },
+  "packerfuzzer": {
+    "stdin_input": "\n\n",
+    "caveat": "工具启动后会通过 stdin 提问两处（强检测/暴力模式确认），系统已自动喂入空回车按默认（非暴力）模式运行，对授权测试更安全；不需要也不应该在 args 里传交互式确认参数。",
+    "timeout": 300
+  },
+  "httpx": {
+    "caveat": "target 由系统自动以 -u 注入，不要在 args 里重复写 -u。**已验证可用的参数示例**：`-title -status-code -web-server -follow-redirects -timeout 8 -silent -no-color`。注意：`-redirect` **不存在**（会被判无效参数），需要跟随跳转请用 `-follow-redirects`。-timeout 只用纯数字秒数（如 -timeout 5），带 s 后缀会被拒绝。若目标响应慢，请显式给 -timeout 8；本工具单次执行上限 25 秒，超时会整棵进程树终止。",
+    "target_type": "host",
+    "disallowed_flags": [
+      "-l",
+      "--list",
+      "-redirect"
+    ],
+    "timeout": 25,
+    "network_control": {
+      "declared": true,
+      "supports_rate": true,
+      "supports_concurrency": true,
+      "rate_flags": [
+        "-rate-limit"
+      ],
+      "concurrency_flags": [
+        "-threads"
+      ],
+      "traffic_class": "medium"
+    }
+  },
+  "oneforall": {
+    "target_type": "domain",
+    "caveat": "target 只接受裸域名（执行器强制校验 target_type=domain，带协议/路径会被拒绝）。子域收集结果仅授权域名可直接测试。",
+    "caps": [
+      "bruteforce",
+      "scan"
+    ]
+  },
+  "md5_tool": {
+    "interactive": true,
+    "interactive_reason": "交互式菜单程序：非交互调用只打印菜单然后等 stdin，撞满 TOOL_IDLE_TIMEOUT(120s) 才被终止 —— 白烧一步 + 两分钟，且模型从输出里只能看到半个菜单，无法判断是失败还是卡住。实测于 2026-09-22 tgt-e.test 第三轮（该工具在 risk_grades.json 里是 L0，即**自动执行**，所以没有任何人工环节能提前拦住它）。",
+    "caveat": "本工具为交互式菜单，已从模型可见清单中移除，请勿调用。需要哈希计算请用 py_exec（`import hashlib` 在只读白名单内，单行即可）；需要查哈希原文请改用网页工具或 py_exec 的受控出网接口。"
+  },
+  "goon": {
+    "caps": [
+      "bruteforce",
+      "scan"
+    ],
+    "caveat": "已声明 caps=[bruteforce, scan]（v048）：任务书若写明「不做字典爆破」或「禁止扫描」，本工具会被**任务级约束闸门直接拒绝执行**。本工具是扫描探测 + 爆破工具集，只在授权目标上使用，并自行限速。"
+  },
+  "fscan": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  },
+  "afrog": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  },
+  "dddd_scan": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  },
+  "rscan": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  },
+  "sharpscan": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  },
+  "springboot_scan": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  },
+  "kscan": {
+    "caps": [
+      "scan"
+    ],
+    "caveat": "已声明 caps=[scan]（v048）：任务书若写明「禁止扫描 / 不做主动扫描」，本工具会被**任务级约束闸门直接拒绝执行**。另注意本工具未声明 network_control，内部流量不可观测 —— 请自行用参数限速/限并发，遵守最小必要。"
+  }
+}

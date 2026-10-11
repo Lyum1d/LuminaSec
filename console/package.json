@@ -1,0 +1,6 @@
+{
+  "_comment": "本文件只为让 Node 把本目录的 .js 当作 ES module 加载（供 test_console_js.js 直接 import 纯函数做行为测试）。浏览器不读它；这里**没有也不应该有**任何依赖。",
+  "name": "src-agent-console",
+  "private": true,
+  "type": "module"
+}
