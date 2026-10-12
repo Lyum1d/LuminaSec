@@ -8,7 +8,7 @@
  * 而不是一条平行推断。前端不做第二套校验规则（避免两份规则漂移）。
  */
 import { api, esc, modal, toast, alertBox, reload, setFileHint }
-  from '/console-assets/core.js?v=103';
+  from '/console-assets/core.js?v=112';
 
 let DATA = null;
 const DIRTY = {};        // key -> 新值

@@ -757,7 +757,15 @@ class Step:
     risk: dict
     status: str = "pending"  # pending | running | done | denied | error | cancelled
     output: str = ""
-    attribution: str = ""    # 失败归因档位（SCOPE | L1 | L3 | L4），成功时为空
+    # 失败归因档位。**成功时为空**。
+    #   · 执行失败（status=error）走 `_attribute_failure` 的分层：
+    #     SCOPE | WAF_BLOCKED | WAF_CAUTION | NETWORK | L1 | L3 | L4
+    #   · 被闸门拒绝（status=denied）走 v111 新增的三档，用于区分是**哪道闸门**：
+    #     GATE_SUBTASK（并行子任务禁 L2/L3）| GATE_CONSTRAINT（任务级约束）|
+    #     GATE_RISK（人工未确认）
+    #     ⚠️ v111 之前的旧数据这一栏是空的 —— 控制台会把它单独归成
+    #     「闸门拒绝·未标注」，不要当成"没归因"。
+    attribution: str = ""
     started_at: float | None = None
     finished_at: float | None = None
 
@@ -1600,6 +1608,11 @@ class Agent:
                            f"这一步留给主线索，由人工确认后单独执行。")
                     session.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": msg})
                     step.status = "denied"
+                    # v111：**记下是哪道闸门拦的**。`denied` 对应三道不同的闸门
+                    # （子任务闸门 / 任务级约束闸门 / 风险确认闸门），不记的话
+                    # 控制台「失败归因分布」里只能画出一个说不清的大桶，
+                    # 而"哪道闸门最容易误伤"恰恰是看板最该回答的问题。
+                    step.attribution = "GATE_SUBTASK"
                     await session.emit({"type": "step_denied", "step": self._step_dict(step)})
                     try:
                         store.save_step(session.id, self._step_dict(step))
@@ -1653,6 +1666,8 @@ class Agent:
                     cap, hit = viol
                     msg = taskguard.refusal_message(tool.name, cap, hit)
                     step.status = "denied"
+                    # v111：与子任务闸门区分开（见 GATE_SUBTASK 处的说明）
+                    step.attribution = "GATE_CONSTRAINT"
                     step.output = msg
                     session.messages.append({"role": "tool",
                                              "tool_call_id": tc["id"], "content": msg})
@@ -1676,6 +1691,8 @@ class Agent:
                     approved, edited_args = await self._await_confirm(session, step)
                     if not approved:
                         step.status = "denied"
+                        # v111：与子任务闸门区分开（见 GATE_SUBTASK 处的说明）
+                        step.attribution = "GATE_RISK"
                         # v023.6（实战反馈）：拒绝后要给**可执行的替代路径**，
                         # 否则模型只能自己猜怎么降级（实测 py_exec 被拒后，
                         # 模型多花一步才想到改用 httpreplay 单发）。

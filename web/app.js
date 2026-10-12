@@ -590,6 +590,9 @@ async function loadTools() {
   // 使用者看到的是「工具全空」，而原因原本只存在于后端 registry.errors 里 ——
   // 结果是只能翻日志或问人。这里把原因与配置方法直接显示出来。
   state.toolboxNotice = (d.errors && d.errors.length) ? String(d.errors[0]) : '';
+  // v110：工具来源现在有三类（外部工具箱 / 本机自备 / 内置能力）。
+  // 只显示"未配置工具箱"会让用户以为无路可走 —— 所以在提示下面补一句"下一步"。
+  state.toolboxHint = d.local_hint || '';
   renderTools();
 }
 
@@ -617,6 +620,8 @@ function renderTools() {
   // 降级提示摆在最上面：让「工具少了」这件事自带解释，而不是让人以为程序坏了。
   const notice = state.toolboxNotice
     ? `<div class="tool-notice">⚠️ ${esc(state.toolboxNotice)}</div>`
+      + (state.toolboxHint
+          ? `<div class="tool-notice hint2">${esc(state.toolboxHint)}</div>` : '')
     : '';
 
   $('toolList').innerHTML = notice + (Object.entries(groups).map(([cat, list]) => `
@@ -625,6 +630,10 @@ function renderTools() {
       // v108：内置能力没有可启动的程序 ⇒ **不给点击交互**，改挂「内置」徽标 + 说明。
       // 风险分级照旧显示（例如 Python代码执行 是 L3），只是不再假装它能"一键启动"。
       const risk = t.scriptable ? `<span class="badge ${t.risk_level}">${t.risk_level}</span>` : '';
+      // v110：自备工具加「自备」徽标。它是**本机**的，换台机器就没有 ——
+      // 与工具箱自带的一视同仁会让用户以为"程序把我的工具吃掉了"。
+      const srcBadge = t.source === 'local'
+        ? '<span class="badge local-src">自备</span>' : '';
       const badge = t.builtin
         ? `<span class="badge builtin">内置</span>${risk}`
         : t.url
@@ -637,10 +646,12 @@ function renderTools() {
       const click = t.builtin ? '' : (t.url ? `window.open('${t.url}')` : `launchTool('${t.alias}')`);
       const tip = t.builtin
         ? `${t.name}（内置能力）：由 Agent 在任务执行时调用，不需要工具箱，也不能单独启动`
-        : (t.path || t.url);
+        : (t.source === 'local'
+            ? `${t.path || t.url}（来自你自备的目录：${t.root_label || '未命名'}）`
+            : (t.path || t.url));
       return `<div class="tool${t.builtin ? ' tool-builtin' : ''}"${
         click ? ` onclick="${click}"` : ''} title="${esc(tip)}">
-                <span class="tname">${esc(t.name)}</span>${badge}
+                <span class="tname">${esc(t.name)}</span>${srcBadge}${badge}
               </div>`;
     }).join('')}
   `).join('')) || (notice ? '' : '<div class="empty">无匹配工具</div>');

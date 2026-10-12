@@ -7,7 +7,7 @@
  *   · `include_subdomains` 在本版**只读**（闸门还没支持「不含子域」，见下）。
  */
 import { api, esc, modal, toast, diffHtml, alertBox, reload, setFileHint, parseList }
-  from '/console-assets/core.js?v=103';
+  from '/console-assets/core.js?v=112';
 
 let rows = [];          // 当前编辑中的结构化条目
 let meta = {};          // 服务端返回的 data（含 file / consistent / note）

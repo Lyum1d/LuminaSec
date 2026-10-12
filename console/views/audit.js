@@ -4,7 +4,7 @@
  * 承诺了留痕，就得有个地方能看见痕。
  */
 import { api, esc, fmtTime, toast, setFileHint, alertBox }
-  from '/console-assets/core.js?v=103';
+  from '/console-assets/core.js?v=112';
 
 const FACES = [['', '全部'], ['scope', '授权白名单'], ['tools', '工具与分级'],
                ['params', '运行参数'], ['rules', '合规与模板'], ['auth', '登录']];

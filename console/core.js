@@ -150,16 +150,25 @@ const VIEWS = {
   overview: () => import('/console-assets/views/overview.js?v=103'),
   scope:    () => import('/console-assets/views/scope.js?v=052'),
   tools:    () => import('/console-assets/views/tools.js?v=052'),
+  // v110：本机自备工具（加目录 → 自动识别 → 并入工具箱）。
+  // 刻意**紧挨着「工具与分级」**：两者是同一件事的两半 ——
+  // 这一页回答"有哪些工具"，那一页回答"每个工具怎么分级、怎么设闸门"，
+  // 而两类工具（外部工具箱 / 自备）在这两页里是**同一套数据**。
+  localtools: () => import('/console-assets/views/localtools.js?v=110'),
   params:   () => import('/console-assets/views/params.js?v=052'),
   rules:    () => import('/console-assets/views/rules.js?v=103'),
   // v102：白盒侧（代码库 + 知识库）。放在 scope 之后：两者都是"授权/范围"性质的写入口。
   whitebox: () => import('/console-assets/views/whitebox.js?v=102'),
-  monitor:  () => import('/console-assets/views/monitor.js?v=052'),
-  charts:   () => import('/console-assets/views/charts.js?v=052'),
+  // v112：实时监控从占位页换成真页（运行列表 + 透传既有确认/取消）。URL 必须跟着抬。
+  monitor:  () => import('/console-assets/views/monitor.js?v=112'),
+  // v111：统计看板从占位页换成真看板（自绘 SVG）。URL 必须跟着抬，
+  // 否则浏览器会继续用缓存的占位版。
+  charts:   () => import('/console-assets/views/charts.js?v=111'),
   audit:    () => import('/console-assets/views/audit.js?v=052'),
 };
 const TITLES = {
-  overview: '总览', scope: '授权白名单', tools: '工具与分级', params: '运行参数',
+  overview: '总览', scope: '授权白名单', tools: '工具与分级',
+  localtools: '本地工具（自备目录）', params: '运行参数',
   rules: '合规与模板', whitebox: '白盒侧（代码库 / 知识库）',
   monitor: '实时监控', charts: '统计看板', audit: '合规审计',
 };

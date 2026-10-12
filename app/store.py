@@ -273,6 +273,10 @@ CREATE TABLE IF NOT EXISTS causal_edges (
     created_at  REAL
 );
 CREATE INDEX IF NOT EXISTS idx_steps_session ON steps(session_id);
+-- v111：控制台「统计看板」按**时间窗**聚合 steps。原先只有 session_id 索引，
+-- `EXPLAIN QUERY PLAN` 对 `WHERE created_at > ?` 是 `SCAN steps`（全表扫）——
+-- 步骤表是本库增长最快的表之一，看板每次切页都扫一遍会把控制台拖住。
+CREATE INDEX IF NOT EXISTS idx_steps_created ON steps(created_at);
 CREATE INDEX IF NOT EXISTS idx_findings_project ON findings(project_id);
 CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project_id);
 CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
@@ -881,15 +885,49 @@ def session_review(sid: str) -> dict:
     }
 
 
-def list_sessions(project_id: str | None = None) -> list[dict]:
+def list_sessions(project_id: str | None = None, limit: int = 50) -> list[dict]:
+    """会话列表（按创建时间倒序）。
+
+    v112：新增 `limit`。原先不传 project_id 时**写死 LIMIT 50** ——
+    对"某个项目的会话列表"够用，但运行监控要的是"最近 N 条"，上限必须是调用方能调的
+    （并且由调用方夹取），否则要么看不全、要么被一个死数卡住。
+    """
+    n = max(1, int(limit or 50))
     with _db() as c:
         if project_id:
             rows = c.execute(
-                "SELECT * FROM sessions WHERE project_id=? ORDER BY created_at DESC", (project_id,)
+                "SELECT * FROM sessions WHERE project_id=? ORDER BY created_at DESC LIMIT ?",
+                (project_id, n),
             ).fetchall()
         else:
-            rows = c.execute("SELECT * FROM sessions ORDER BY created_at DESC LIMIT 50").fetchall()
+            rows = c.execute(
+                "SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?", (n,)
+            ).fetchall()
     return [dict(r) for r in rows]
+
+
+def session_step_counts(session_ids: list[str]) -> dict[str, dict[str, int]]:
+    """批量取多个会话的**步骤计数**（按 status 分组）。返回 {sid: {status: n}}。
+
+    为什么要有它：运行列表要给每个会话显示"多少步 / 几步失败"。
+    逐会话查一次就是 N+1（列表 50 行 = 51 次查询），这里一次 `IN (...)` 查完。
+
+    ⚠️ **只回计数，不回步骤正文**。`steps.output` 是工具输出的全文，可能很大；
+    列表接口带上它会让响应体量翻几十倍，而列表页根本用不到 ——
+    要看正文请用既有的 `/api/sessions/{sid}`（那里本来就返回 steps）。
+    """
+    ids = [str(x) for x in session_ids if x]
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    out: dict[str, dict[str, int]] = {}
+    with _db() as c:
+        for r in c.execute(
+            f"SELECT session_id, status, COUNT(*) n FROM steps "
+            f"WHERE session_id IN ({q}) GROUP BY session_id, status", tuple(ids)
+        ):
+            out.setdefault(r["session_id"] or "", {})[r["status"] or "?"] = r["n"]
+    return out
 
 
 def get_session(sid: str) -> dict | None:
@@ -1886,6 +1924,134 @@ def delete_intel(project_id: str) -> bool:
     with _db() as c:
         c.execute("DELETE FROM intel WHERE project_id=?", (project_id,))
     return True
+
+
+# ---------- 控制台「统计看板」聚合（v111）----------
+# 只读。**SQL 只在这一层**；「哪些算成功、哪些算失败」这类**口径**留在调用方
+# （app/console_api.py），两者不要混在一处 —— 口径要能被单独审阅与测试。
+#
+# 共同约定：
+#   · `since` 是 unix 时间戳下界（含），`None` = 不限时间（全部历史）。
+#     窗口边界的计算由调用方负责，这里**不解释 days**（免得两处各算一遍边界）。
+#   · 一次调用**只开一个连接**（下面的 `_stat_*` 都接收同一个游标）。
+
+def _stat_steps(c, since) -> dict:
+    """步骤：状态分布 + 归因分布 + 耗时统计。"""
+    w, p = ("WHERE created_at >= ?", (since,)) if since is not None else ("", ())
+    by_status = {(r["status"] or "?"): r["n"] for r in c.execute(
+        f"SELECT status, COUNT(*) n FROM steps {w} GROUP BY status", p)}
+    by_attr = [{"status": r["status"] or "", "attribution": r["attribution"] or "",
+                "n": r["n"]}
+               for r in c.execute(
+        f"SELECT status, attribution, COUNT(*) n FROM steps {w} "
+        # ⚠️ 只取**真正的失败/拒绝**：`running` 是在途、`done` 是成功，
+        # 混进「失败归因」图会让人以为它们失败了。
+        f"{'AND' if w else 'WHERE'} status IN ('error', 'denied') "
+        "GROUP BY status, attribution ORDER BY n DESC", p)]
+    # ⚠️ `elapsed <= 0` 是**没记录到耗时**，不是「瞬时完成」。实测占 38%（117/306）——
+    # 混进分位数会把 p50 拉到 0，而均值看着还挺正常（6.47s），属于"看着对但错得很远"。
+    n_valid = c.execute(
+        f"SELECT COUNT(*) FROM steps {w} "
+        f"{'AND' if w else 'WHERE'} elapsed > 0", p).fetchone()[0]
+    n_zero = c.execute(
+        f"SELECT COUNT(*) FROM steps {w} "
+        f"{'AND' if w else 'WHERE'} elapsed <= 0", p).fetchone()[0]
+    elapsed = {"valid": n_valid, "excluded": n_zero}
+    if n_valid:
+        elapsed["max"] = round(float(c.execute(
+            f"SELECT MAX(elapsed) m FROM steps {w} "
+            f"{'AND' if w else 'WHERE'} elapsed > 0", p).fetchone()["m"] or 0.0), 2)
+        # 分位数用「排序 + OFFSET 取第 k 个」：SQLite 没有 percentile 函数，
+        # 而把整列拉进 Python 在库大了以后是几万行、且每次切页都做一遍。
+        for label, frac in (("p50", .5), ("p90", .9), ("p99", .99)):
+            off = max(0, min(n_valid - 1, int(n_valid * frac)))
+            v = c.execute(
+                f"SELECT elapsed FROM steps {w} "
+                f"{'AND' if w else 'WHERE'} elapsed > 0 "
+                "ORDER BY elapsed LIMIT 1 OFFSET ?", (*p, off)).fetchone()[0]
+            elapsed[label] = round(float(v or 0.0), 2)
+    else:
+        elapsed.update({"max": None, "p50": None, "p90": None, "p99": None})
+    total = c.execute(f"SELECT COUNT(*) FROM steps {w}", p).fetchone()[0]
+    return {"total": total, "by_status": by_status, "by_attribution": by_attr,
+            "elapsed": elapsed}
+
+
+def _stat_tools(c, since, top: int) -> dict:
+    """工具调用频次 TOP N + 用过的工具种数。"""
+    w, p = ("WHERE created_at >= ?", (since,)) if since is not None else ("", ())
+    andw = f"{'AND' if w else 'WHERE'} tool_alias <> ''"
+    rows = [{"alias": r["tool_alias"], "name": r["name"] or "",
+             "calls": r["n"], "fail": int(r["f"] or 0)}
+            for r in c.execute(
+        f"SELECT tool_alias, MAX(tool_name) name, COUNT(*) n, "
+        f"SUM(CASE WHEN status <> 'done' THEN 1 ELSE 0 END) f "
+        f"FROM steps {w} {andw} GROUP BY tool_alias ORDER BY n DESC, tool_alias "
+        "LIMIT ?", (*p, int(top)))]
+    distinct = c.execute(
+        f"SELECT COUNT(DISTINCT tool_alias) FROM steps {w} {andw}", p).fetchone()[0]
+    # 窗口内**用过**的全部别名（不只是 TOP N）。调用方拿它与「模型清单里的工具」做差，
+    # 找出「配了却一次没用过」的 —— 那是排障时最有用的一条线索。
+    used = [r["tool_alias"] for r in c.execute(
+        f"SELECT DISTINCT tool_alias FROM steps {w} {andw}", p)]
+    return {"top": rows, "distinct": distinct, "used": used}
+
+
+def _stat_traffic(c, since) -> dict:
+    """目标流量：事件类型 / 错误类型 / 状态码 / 入站字节。"""
+    w, p = ("WHERE created_at >= ?", (since,)) if since is not None else ("", ())
+    andw = f"{'AND' if w else 'WHERE'}"
+    by_ev = {(r["event_type"] or "?"): r["n"] for r in c.execute(
+        f"SELECT event_type, COUNT(*) n FROM traffic_events {w} "
+        "GROUP BY event_type ORDER BY n DESC", p)}
+    by_err = {(r["error_type"] or "?"): r["n"] for r in c.execute(
+        f"SELECT error_type, COUNT(*) n FROM traffic_events {w} "
+        f"{andw} error_type <> '' GROUP BY error_type ORDER BY n DESC", p)}
+    by_code = {str(r["status_code"]): r["n"] for r in c.execute(
+        f"SELECT status_code, COUNT(*) n FROM traffic_events {w} "
+        f"{andw} status_code IS NOT NULL GROUP BY status_code "
+        "ORDER BY n DESC LIMIT 12", p)}
+    b = c.execute(f"SELECT COALESCE(SUM(bytes_in),0) b FROM traffic_events {w}",
+                  p).fetchone()["b"]
+    return {"by_event_type": by_ev, "by_error_type": by_err,
+            "by_status_code": by_code, "bytes_in": int(b or 0)}
+
+
+def _stat_findings(c, since) -> dict:
+    w, p = ("WHERE created_at >= ?", (since,)) if since is not None else ("", ())
+    return {"by_severity": {(r["severity"] or "未标"): r["n"] for r in c.execute(
+        f"SELECT severity, COUNT(*) n FROM findings {w} GROUP BY severity "
+        "ORDER BY n DESC", p)}}
+
+
+def _stat_flow(c, since) -> dict:
+    w, p = ("WHERE created_at >= ?", (since,)) if since is not None else ("", ())
+    return {"verdicts": {(r["verdict"] or "未判"): r["n"] for r in c.execute(
+        f"SELECT verdict, COUNT(*) n FROM flow_runs {w} GROUP BY verdict "
+        "ORDER BY n DESC", p)}}
+
+
+def console_stats(since: float | None = None, top: int = 15) -> dict:
+    """控制台统计看板的全部聚合（**一次连接**）。
+
+    `since=None` 表示不限时间窗。参数由调用方算好（见 app/console_api.py）。
+    """
+    with _db() as c:
+        out = {
+            "steps": _stat_steps(c, since),
+            "tools": _stat_tools(c, since, top),
+            "traffic": _stat_traffic(c, since),
+            "findings": _stat_findings(c, since),
+            "flow": _stat_flow(c, since),
+        }
+        row = c.execute(
+            "SELECT (SELECT MIN(created_at) FROM steps) a, "
+            "(SELECT MAX(created_at) FROM steps) b, "
+            "(SELECT COUNT(*) FROM projects) p, "
+            "(SELECT COUNT(*) FROM sessions) s").fetchone()
+    out["span"] = {"first_step_at": row["a"], "last_step_at": row["b"],
+                   "projects": row["p"], "sessions": row["s"]}
+    return out
 
 
 # ---------- 产物目录 ----------

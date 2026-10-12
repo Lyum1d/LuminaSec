@@ -11,7 +11,16 @@ DATA_DIR = APP_DIR / "data"
 WEB_DIR = APP_DIR / "web"
 DATA_DIR.mkdir(exist_ok=True, parents=True)
 
-# 天狐渗透工具箱根目录。
+# 外部工具箱根目录（可选）。
+#
+# v110 改口径：这个目录**不再是"必须有"的东西**。原先它其实是某个第三方工具箱
+#   的目录布局约定（`config/tools.json` 清单、`python3/python.exe`、`Java_path/...`），
+#   于是"工具"这个概念被一家工具箱绑死了：没装那个工具箱的人一个外部工具都没有，
+#   也没法用自己的工具。现在工具来源有三类，**只有第一类需要这个路径**：
+#     ① 外部工具箱清单（本配置项）—— `registry` 读 `<root>/config/tools.json`；
+#     ② 本机自备工具 —— 用户自己在控制台「本地工具」页添加目录，见 app/local_tools.py；
+#     ③ 内置能力 —— 进程内托管（app/replayer.py），完全不碰磁盘。
+#   TOOLBOX_ROOT 也随之不再叫"工具箱根目录"（那个名字暗示它是唯一的来源）。
 #
 # v056 改：**不再写死默认路径**。原来这里硬编码了一个本机绝对路径
 #   `E:\<网盘下载目录>\天狐渗透工具箱-…`
@@ -23,12 +32,14 @@ DATA_DIR.mkdir(exist_ok=True, parents=True)
 #   ③ **违反本项目自己的约定**：项目说明写着「工具箱路径由环境变量 TOOLBOX_ROOT
 #      指定，**不要写死路径**」。
 #
-# 现在按三级解析（越靠前越优先）：
+# 按三级解析（越靠前越优先）：
 #   1. 环境变量 `TOOLBOX_ROOT` —— 跨机协作的正规做法，也是文档里的说法；
 #   2. 本机 `config.yaml` 的 `toolboxRoot` —— 该文件**不入库**，天然适合放本机路径；
 #      项目已经用它存 FOFA 密钥与控制台口令，**不新增机制**；
 #   3. 都没有 → 视为**未配置**（`TOOLBOX_ROOT_SET = False`），由 registry / health /
 #      启动信息给出"请先配置"的明确提示，而不是含糊的"找不到工具清单"。
+#      ⚠️ v110：未配置**不再是错误**，只是"没有外部工具箱"这一种正常状态 ——
+#      自备工具与内置能力照样工作（registry.load 的两个分支都会载入它们）。
 def _toolbox_root_raw() -> str:
     """工具箱根目录的原始字符串（未配置时为空串）。"""
     env = (os.getenv("TOOLBOX_ROOT") or "").strip()
@@ -54,9 +65,12 @@ TOOLBOX_ROOT_SET = bool(TOOLBOX_ROOT_RAW)
 TOOLBOX_ROOT = Path(TOOLBOX_ROOT_RAW) if TOOLBOX_ROOT_SET else Path("")
 
 TOOLBOX_ROOT_HELP = (
-    "未配置工具箱根目录。请任选一种方式："
-    "① 设置环境变量 TOOLBOX_ROOT=<天狐渗透工具箱根目录>；"
-    "② 在本机 config.yaml 写 `toolboxRoot: <路径>`（该文件不入库）。"
+    "未配置**外部工具箱**根目录 —— 这不是必须的。"
+    "① 想接入某个外部工具箱：设置环境变量 TOOLBOX_ROOT=<工具箱根目录>，"
+    "或在本机 config.yaml 写 `toolboxRoot: <路径>`（该文件不入库）；"
+    "② 不想接工具箱也行：内置能力（HTTP 重放 / 代码执行 / 知识库 / 白盒审计等）照常可用，"
+    "另外可在配置控制台的「本地工具」页里**添加你自己的工具目录**，"
+    "由程序自动识别其中的工具，无需手写清单。"
 )
 
 # ---------- 工具箱内置运行时 ----------

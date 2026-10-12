@@ -3,7 +3,7 @@
  * 这一页的价值不是「显示数据」，而是**一眼看出哪条防线没配上** ——
  * 下面每一项单看都不报错，组合起来才危险。所以警告区放在最上面，异常项红框置顶。
  */
-import { api, esc, alertBox, setFileHint } from '/console-assets/core.js?v=103';
+import { api, esc, alertBox, setFileHint } from '/console-assets/core.js?v=112';
 
 function kv(k, v, mono = true) {
   return `<div class="kv"><span>${esc(k)}</span>`

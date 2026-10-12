@@ -6,7 +6,7 @@
  *   2. 为什么现在没有；
  *   3. 现在想改这些配置该怎么办（给出文件路径 —— 别让人以为功能坏了）。
  */
-import { esc } from '/console-assets/core.js?v=103';
+import { esc } from '/console-assets/core.js?v=112';
 
 export function placeholder({ title, goal, items = [], apis = [], files = [] }) {
   return async function render(host) {

@@ -1721,3 +1721,732 @@ async def codebases_commit(req: CodebaseRequest, request: Request):
                     note=f"控制台登记代码库 {p['codebase_id']}（{p['white_layer']}）")
     return {"ok": True, "codebase_id": p["codebase_id"], "total": len(items),
             "hint": "登记完可在白盒会话里让 Agent 执行 code_index 建索引。"}
+
+
+# ============================================================ 本地工具（v110）
+# 用户指定一个目录 → 程序自动识别里面的工具 → 并入工具箱。
+#
+# 为什么要有这一面：工具来源原先只有"某个第三方工具箱的 tools.json"，
+# 于是没有那个工具箱的人一个外部工具都没有，也没法用自己的工具。
+# 详见 app/local_tools.py 开头的设计说明。
+#
+# 写入面是**单个文件** data/local_tools.json（本机路径，gitignore），
+# 所以乐观锁只需要核对它的哈希。风险分级与闸门**不在这里写** ——
+# 那是「工具与分级」页的事，两类工具共用同一份配置（这就是"同一套闸门"的落点）。
+
+#: alias 必须能当 function name 用（模型侧要求 ASCII、不以数字开头）。
+#: 校验放在**提交前**：alias 是模型点名工具的唯一依据，写进去一个带中文/空格的
+#: alias，表现为"工具在清单里但模型永远调不到"，极难排查。
+_ALIAS_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,47}$")
+
+#: 单个目录识别到这么多工具就提醒。不是硬限制 —— 是提醒用户
+#: 「这么多工具会给模型清单很大压力，考虑拆成几个目录或排除掉不需要的」。
+LOCAL_TOOLS_WARN_COUNT = 60
+
+
+class LocalRootIn(BaseModel):
+    """一个自备工具目录（前端回传的期望状态）。"""
+    path: str = ""
+    label: str = ""
+    category: str = ""
+    enabled: bool = True
+    java: str = "JAVA8"
+    note: str = ""
+    excluded: list[str] = []
+    aliases: dict[str, str] = {}       # rel_path -> alias（只回传用户改过的）
+    overrides: dict = {}               # 高级：name / type / category / description
+
+
+class LocalToolsRequest(BaseModel):
+    roots: list[LocalRootIn] = []
+    confirm_token: str = ""
+    expect_sha256: str = ""
+
+
+class LocalBrowseRequest(BaseModel):
+    path: str = ""
+
+
+def _local_tools_path():
+    from .local_tools import CONFIG_FILE
+    return CONFIG_FILE
+
+
+def _merge_root(inp: LocalRootIn) -> dict:
+    """把前端回传的目录条目并成内部形状（`aliases` 折进 `overrides`）。"""
+    ovs: dict[str, dict] = {}
+    for rel, v in (inp.overrides or {}).items():
+        if isinstance(v, dict):
+            ovs[str(rel)] = {k: v[k] for k in ("name", "type", "category", "description")
+                             if v.get(k)}
+    for rel, alias in (inp.aliases or {}).items():
+        a = str(alias or "").strip()
+        cur = ovs.setdefault(str(rel), {})
+        if a:
+            cur["alias"] = a
+        else:
+            cur.pop("alias", None)
+    return {
+        "path": str(inp.path or "").strip(),
+        "label": str(inp.label or "").strip(),
+        "category": str(inp.category or "").strip(),
+        "enabled": bool(inp.enabled),
+        "java": str(inp.java or "JAVA8").strip().upper(),
+        "note": str(inp.note or "").strip(),
+        "excluded": [str(x) for x in (inp.excluded or [])],
+        "overrides": {k: v for k, v in ovs.items() if v},
+    }
+
+
+def _diff_roots(before: list[dict], after: list[dict]) -> list[dict]:
+    """目录级差异（新增 / 移除 / 字段变更 / 排除项增减 / 别名变更）。"""
+    bmap = {str(r.get("path", "")).lower(): r for r in before}
+    amap = {str(r.get("path", "")).lower(): r for r in after}
+    diff: list[dict] = []
+    for k, a in amap.items():
+        b = bmap.get(k)
+        lbl = a.get("label") or a.get("path")
+        if not b:
+            diff.append({"key": "目录 · 新增", "before": "（无）", "after": f"{lbl}（{a['path']}）"})
+            continue
+        for f, cn in (("label", "显示名"), ("category", "默认分类"),
+                      ("enabled", "启用"), ("java", "jar 的 java 版本"), ("note", "备注")):
+            if b.get(f) != a.get(f):
+                diff.append({"key": f"{lbl} · {cn}", "before": b.get(f), "after": a.get(f)})
+        be, ae = set(b.get("excluded") or []), set(a.get("excluded") or [])
+        for x in sorted(ae - be):
+            diff.append({"key": f"{lbl} · 不再纳入", "before": "纳入", "after": x})
+        for x in sorted(be - ae):
+            diff.append({"key": f"{lbl} · 重新纳入", "before": x, "after": "纳入"})
+        bo, ao = b.get("overrides") or {}, a.get("overrides") or {}
+        for rel in sorted(set(bo) | set(ao)):
+            if bo.get(rel) != ao.get(rel):
+                diff.append({"key": f"{lbl} · {rel}",
+                             "before": json.dumps(bo.get(rel) or {}, ensure_ascii=False),
+                             "after": json.dumps(ao.get(rel) or {}, ensure_ascii=False)})
+    for k, b in bmap.items():
+        if k not in amap:
+            diff.append({"key": "目录 · 移除",
+                         "before": f"{b.get('label') or b.get('path')}（{b.get('path')}）",
+                         "after": "（已移除）"})
+    return diff
+
+
+def _validate_roots(raw: list[dict]) -> tuple[list[str], list[str]]:
+    """返回 (阻断性错误, 提醒)。阻断就不签发票据。"""
+    from . import local_tools as lt
+
+    errors: list[str] = []
+    warns: list[str] = []
+    seen: dict[str, str] = {}
+    for r in raw:
+        lbl = r.get("label") or r.get("path") or "（未命名）"
+        p, err = lt.validate_root_path(r.get("path", ""))
+        if err:
+            errors.append(f"「{lbl}」：{err}")
+            continue
+        key = str(p).lower()
+        if key in seen:
+            errors.append(f"「{lbl}」与「{seen[key]}」是同一个目录，重复添加了。")
+        seen[key] = lbl
+        if r.get("java") not in ("JAVA8", "JAVA11"):
+            warns.append(f"「{lbl}」的 java 版本 {r.get('java')!r} 不认识，"
+                         "已按 JAVA8 处理（可选 JAVA8 / JAVA11）。")
+        # ⚠️ 校验的是**折进 overrides 之后**的别名，不是入参里的 `aliases`。
+        # `_merge_root()` 会把 `aliases` 并进 `overrides[rel]["alias"]` 并丢掉顶层键，
+        # 所以这里读 `r["aliases"]` 会永远拿到空 —— 那段校验就成了死代码
+        # （本套单测第一版就是这么写的，被 test_local_tools 抓出来）。
+        for rel, ov in (r.get("overrides") or {}).items():
+            a = str((ov or {}).get("alias") or "").strip()
+            if a and not _ALIAS_RE.match(a):
+                errors.append(
+                    f"「{lbl}」的别名 {a!r} 不能用作工具名（{rel}）："
+                    "只能是字母/数字/下划线，且以字母或下划线开头（模型侧要求 ASCII）。")
+        scan = lt.scan_root(r)
+        if scan["exists"]:
+            inc = scan["stats"]["included"]
+            if inc == 0:
+                warns.append(f"「{lbl}」里没有识别到工具，保存后它不会贡献任何工具。")
+            elif inc >= LOCAL_TOOLS_WARN_COUNT:
+                warns.append(
+                    f"「{lbl}」识别到 {inc} 个工具 —— 数量偏多，它们会**全部**进入模型"
+                    "工具清单，可能拖慢本地小模型的决策。建议拆成几个目录，"
+                    "或把不需要的排除掉。")
+    if not raw:
+        warns.append("保存后不含任何自备工具目录 —— 等于清空本机自备工具。")
+    return errors, warns
+
+
+@router.get("/localtools")
+async def localtools_get(request: Request):
+    """列出已添加的目录 + 各自的识别结果。"""
+    require_auth(request)
+    from . import local_tools as lt
+    from .registry import registry
+
+    conf = lt.load_config()
+    files = config_io.file_state(_local_tools_path())
+    roots = []
+    for r in conf["roots"]:
+        scan = lt.scan_root(r)
+        roots.append({
+            "id": scan["id"], "path": scan["path"], "label": scan["label"],
+            "category": scan["category"], "enabled": scan["enabled"],
+            "java": r.get("java") or "JAVA8", "note": scan.get("note", ""),
+            "exists": scan["exists"], "problem": scan["problem"],
+            "stats": scan["stats"], "truncated": scan["truncated"],
+            "hint": scan.get("hint", ""),
+            "tools": [{"rel_path": t["rel_path"], "name": t["name"], "type": t["type"],
+                       "category": t["category"], "excluded": t["excluded"],
+                       "exists": True} for t in scan["tools"]],
+        })
+    return {
+        "ok": True,
+        "roots": roots,
+        "counts": {
+            "roots": len(roots),
+            "local_tools": registry.stats().get("local", 0),
+            "registry_total": len(registry.tools),
+        },
+        "ext_types": {k: v for k, v in sorted(lt.EXT_TYPES.items())},
+        "bookmark_exts": sorted(lt.BOOKMARK_EXTS),
+        "shortcut_exts": sorted(lt.SHORTCUT_EXTS),
+        "max_depth": lt.MAX_DEPTH,
+        "warn_count": LOCAL_TOOLS_WARN_COUNT,
+        "file": files,
+        "note": ("这里只登记**目录**，工具条目每次启动重新扫描 —— "
+                 "在目录里增删工具后重启即跟随。风险分级与闸门请到「工具与分级」页改，"
+                 "自备工具与外部工具共用那两份配置。"),
+    }
+
+
+@router.post("/localtools/browse")
+async def localtools_browse(req: LocalBrowseRequest, request: Request):
+    """目录选择器：列出一个目录下的**子目录**（只给名字，不读文件内容）。
+
+    浏览器出于安全**不会**把 `<input type=file>` 选中的绝对路径告诉页面，
+    而这里需要的恰是本机绝对路径，所以只能自己给一个浏览入口。
+    范围刻意收得很窄：只返回目录名与"该目录里识别到几个工具"，
+    **不返回任何文件内容**；控制台本身有口令闸门且只改配置。
+    """
+    require_auth(request)
+    import os
+    from pathlib import Path as _P
+    from . import local_tools as lt
+
+    raw = str(req.path or "").strip().strip('"').strip("'")
+    if not raw:
+        drives = []
+        for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            d = _P(f"{ch}:\\")
+            if d.exists():
+                drives.append({"name": f"{ch}:\\", "path": f"{ch}:\\", "count": None})
+        return {"ok": True, "path": "", "parent": "", "dirs": drives,
+                "is_root_list": True, "hint": "请选择一个盘符，再逐级进入工具目录。"}
+
+    p = _P(raw)
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(400, f"目录不存在：{raw}")
+    dirs = []
+    try:
+        with os.scandir(p) as it:
+            for e in sorted(it, key=lambda x: x.name.lower()):
+                if len(dirs) >= 500:
+                    break
+                try:
+                    if e.is_dir(follow_symlinks=False) and not e.name.startswith("."):
+                        dirs.append({"name": e.name, "path": str(_P(e.path)), "count": None})
+                except OSError:
+                    continue
+    except OSError as exc:
+        raise HTTPException(400, f"读取目录失败：{exc}") from exc
+
+    # 当前目录自己识别到几个工具（浅扫，给用户"就是这里"的判断依据）
+    here = None
+    try:
+        s = lt.scan_root({"path": str(p)})
+        if s["exists"]:
+            here = s["stats"]
+    except Exception:                                     # noqa: BLE001
+        here = None
+    parent = str(p.parent) if str(p.parent) != str(p) else ""
+    return {"ok": True, "path": str(p), "parent": parent, "dirs": dirs,
+            "is_root_list": False, "here": here,
+            "accepts": sorted(lt.EXT_TYPES) + sorted(lt.BOOKMARK_EXTS)}
+
+
+@router.post("/localtools/scan")
+async def localtools_scan(req: LocalRootIn, request: Request):
+    """扫描一个候选目录，返回"纳入后会长什么样"（**不写盘**）。"""
+    require_auth(request)
+    from . import local_tools as lt
+    from .registry import registry
+
+    merged = _merge_root(req)
+    _p, err = lt.validate_root_path(merged["path"])
+    if err:
+        raise HTTPException(400, err)
+    scan = registry.preview_local_root(merged)
+    scan["ok"] = True
+    scan["warn_count"] = LOCAL_TOOLS_WARN_COUNT
+    return scan
+
+
+@router.post("/localtools/preview")
+async def localtools_preview(req: LocalToolsRequest, request: Request):
+    """校验 + 算差异 + 签发一次性确认票据。"""
+    require_auth(request)
+    from . import local_tools as lt
+
+    raw = [_merge_root(r) for r in req.roots]
+    errors, warns = _validate_roots(raw)
+    if errors:
+        raise HTTPException(400, "校验未通过：" + "；".join(errors))
+
+    before = [dict(r) for r in lt.load_config()["roots"]]
+    after = lt.save_config(raw)["roots"]
+    diff = _diff_roots(before, after)
+    if not diff:
+        raise HTTPException(400, "没有任何改动。")
+
+    sha = config_io.sha256_short(_local_tools_path())
+    tok = _issue_confirm("localtools", "write", {"roots": after}, sha)
+    adds = sum(1 for d in diff if d["key"].endswith("新增"))
+    removes = sum(1 for d in diff if d["key"].endswith("移除"))
+    return {
+        "ok": True, "diff": diff, "level": "high" if (adds or removes) else "mid",
+        "requires_confirm": True, "confirm_token": tok,
+        "expect_sha256": sha, "confirm_ttl": config.CONSOLE_CONFIRM_TTL,
+        "warnings": warns
+                    + ([f"将新增 {adds} 个工具目录"] if adds else [])
+                    + ([f"将移除 {removes} 个工具目录"] if removes else []),
+    }
+
+
+@router.post("/localtools/commit")
+async def localtools_commit(req: LocalToolsRequest, request: Request):
+    require_auth(request)
+    from . import local_tools as lt
+    from .registry import registry
+
+    rec = _consume_confirm(req.confirm_token, "localtools")
+    cur = config_io.sha256_short(_local_tools_path())
+    if req.expect_sha256 and cur and cur != req.expect_sha256:
+        raise HTTPException(409, (
+            "local_tools.json 在你预览之后被改动过（可能手工编辑或另一次提交），"
+            f"已拒绝写入以免覆盖。盘上当前 {cur} ≠ 你确认时的 {req.expect_sha256}。"
+            "请刷新页面重新预览。"))
+
+    # ⚠️ 先取一份"改前"快照 —— 写盘之后再读就是同一份了，审计会变成"改了=没改"。
+    before_paths = [r.get("path") for r in lt.load_config()["roots"]]
+    payload = lt.save_config(rec["payload"]["roots"])
+    res = config_io.write_json_atomic(_local_tools_path(), payload)
+    if not res.get("ok"):
+        raise HTTPException(500, f"写入失败：{res.get('error')}")
+
+    n_local = registry.load().stats().get("local", 0)
+    config_io.audit("localtools", "write",
+                    before={"roots": before_paths},
+                    after={"roots": [r["path"] for r in payload["roots"]],
+                           "local_tools": n_local},
+                    level="high",
+                    note=f"自备工具目录 {len(payload['roots'])} 个，识别出 {n_local} 个工具")
+
+    roots = []
+    for r in payload["roots"]:
+        s = lt.scan_root(r)
+        roots.append({"path": s["path"], "label": s["label"], "exists": s["exists"],
+                      "stats": s["stats"], "problem": s["problem"]})
+    return {
+        "ok": True, "roots": roots, "local_tools": n_local,
+        "registry_total": len(registry.tools),
+        "registry_errors": list(registry.errors),
+        "file": config_io.file_state(_local_tools_path()),
+        "hint": ("已重载 registry。新工具现在可以在会话里被 Agent 调用；"
+                 "想在面板里点击启动的，去「工具与分级」页确认它没被禁用。"),
+    }
+
+
+# ============================================================ 统计看板（v111）
+# 「统计看板」页的数据口。与 `/api/usage/*` 是**互补的两侧**，刻意不重叠：
+#   · `/api/usage/*`        = **成本侧**（token 用量、费用趋势）—— 已有，本口不重复；
+#   · `/api/console/stats`  = **执行侧**（步骤成功率、耗时、工具调用、目标流量）—— 本口。
+# 为什么不复用逐会话接口：看板要的是**跨项目聚合**，让前端拉全部会话再算不现实
+# （数据量大，且控制台不该拉全量）。
+#
+# 三条约束（防止它长成一个通用查询口）：
+#   ① 只读，不接受任意 SQL / 任意时间范围；`days` 夹取到 [0, 365]。
+#   ② 快照式 + 30 秒内存缓存（看板切页会反复拉）。"实时"是「实时监控」页的事，走 SSE。
+#   ③ 分母为 0 时 `success_rate` 返回 **None 而不是 0**（0 会被读成"全线失败"）。
+
+STATS_CACHE: dict[str, dict] = {}
+STATS_CACHE_TTL = 30.0
+STATS_MAX_DAYS = 365
+STATS_MAX_TOP = 50
+#: 窗口内"配了却一次没用过"的工具最多回传多少条（列表本身可能很长）
+STATS_NEVER_USED_MAX = 20
+
+#: 失败归因归一化。原值散落在 `agent.Agent._attribute_failure` 的分层里，
+#: 直接画出来是碎的（层级码与语义名混在一列）。这里收敛成有限几个**可行动**的桶。
+_ATTR_BUCKETS = {
+    "SCOPE": "停手·授权边界",
+    "WAF_BLOCKED": "停手·目标防护",
+    "WAF_CAUTION": "停手·目标防护",
+    "NETWORK": "网络",
+    "L1": "工具未跑起来",
+    "L3": "被环境拦下",
+    "L4": "跑通但无结果",
+}
+#: 被闸门拒绝（status=denied）时记的是**哪道闸门**（v111 起写入）。
+#: 空值 = v111 之前的旧数据 —— 必须与"没归因"区分开，否则会让人以为归因逻辑漏了。
+_GATE_BUCKETS = {
+    "GATE_SUBTASK": "闸门拒绝·子任务",
+    "GATE_CONSTRAINT": "闸门拒绝·任务约束",
+    "GATE_RISK": "闸门拒绝·风险确认",
+}
+
+
+def _bucket_of(status: str, attribution: str) -> str:
+    a = (attribution or "").strip().upper()
+    if status == "denied" or a.startswith("GATE_"):
+        return _GATE_BUCKETS.get(a, "闸门拒绝·未标注（旧数据）")
+    if a in _ATTR_BUCKETS:
+        return _ATTR_BUCKETS[a]
+    if not a:
+        return "未归因"
+    # 未知取值也要**显式出现**，不能悄悄丢 —— 丢了就没人知道归因口径变了。
+    return f"其他（{attribution}）"
+
+
+def _shape_stats(raw: dict, days: int, since, now: float, raw_days: int,
+                 cache_hit: bool) -> dict:
+    from .registry import registry as reg
+
+    st = raw["steps"]
+    bs = st["by_status"]
+    done = bs.get("done", 0)
+    err = bs.get("error", 0)
+    denied = bs.get("denied", 0)
+    running = bs.get("running", 0)
+
+    # ⚠️ 分母**只取 `done + error`**。两条都不能混进来：
+    #   · `denied` = 闸门按设计拦下的，**不是工具失败**。混进分母会让"成功率"
+    #     随"用户有没有配白名单 / 任务约束"漂移 —— 配得越严数字越难看，
+    #     看板会骗人（实测本机 11/306 = 3.6%，混进去成功率掉 3.6 个点）；
+    #   · `running` = 在途，还没有结论。
+    judged = done + err
+    success_rate = round(done / judged, 4) if judged else None
+
+    buckets: dict[str, int] = {}
+    for row in st["by_attribution"]:
+        b = _bucket_of(row["status"], row["attribution"])
+        buckets[b] = buckets.get(b, 0) + row["n"]
+
+    used = set(raw["tools"].get("used") or [])
+    # ⚠️ 这里比的是**可用可编排工具**（`usable_scriptable()`，本机 60 个），
+    # 不是模型实际拿到的 schema 清单（那是 40 条上限截过的）。
+    # 所以要回答的是「哪些可用工具从来没被调用过」这个运维问题，
+    # 字段名也必须叫 usable —— 叫 in_model 会让人以为它等于 schema 里的条数。
+    usable = [t.alias for t in reg.usable_scriptable()]
+    never = [a for a in usable if a not in used]
+
+    ev = raw["traffic"]["by_event_type"]
+    sent, settled = ev.get("sent", 0), ev.get("settled", 0)
+
+    notes: list[str] = []
+    if days != raw_days:
+        notes.append(f"请求的 days={raw_days} 超出允许范围，已按 {days} 处理"
+                     f"（0 = 全部历史，上限 {STATS_MAX_DAYS} 天）。")
+    if not st["total"] and raw["span"]["last_step_at"]:
+        notes.append(
+            f"这个窗口内没有步骤。库里数据的时间跨度是 "
+            f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(raw['span']['first_step_at']))} "
+            f"→ {time.strftime('%Y-%m-%d %H:%M', time.localtime(raw['span']['last_step_at']))}"
+            f"（共 {raw['span']['sessions']} 个会话）—— "
+            "把 days 调大或设为 0 可看全部历史。")
+    elif not raw["span"]["last_step_at"]:
+        notes.append("库里还没有任何步骤记录（新装或还没跑过任务）。")
+    if denied:
+        notes.append(f"status=denied 的 {denied} 条是**闸门按设计拦下**的，"
+                     "已从「成功率」分母中剔除（见 attribution 分布）。")
+    el = st["elapsed"]
+    if el.get("excluded"):
+        notes.append(f"有 {el['excluded']} 条步骤没记录到耗时（elapsed ≤ 0），"
+                     "已排除出分位数计算 —— 否则 p50 会被拉到 0。")
+    if sent and settled and sent > settled:
+        notes.append(f"流量事件里 sent={sent} 但 settled={settled}，"
+                     f"差 {sent - settled} 条（发出去了没落地，可能是事件丢失或未完成）。")
+    if running:
+        notes.append(f"有 {running} 条步骤仍在 running（在途，不计入成功率）。")
+
+    return {
+        "ok": True,
+        "window": {"days": days, "since": since, "until": now,
+                   "label": "全部历史" if days == 0 else f"最近 {days} 天"},
+        "requested_days": raw_days,
+        "clamped": days != raw_days,
+        "cache": {"hit": cache_hit, "ttl": STATS_CACHE_TTL},
+        "generated_at": now,
+        "steps": {
+            "total": st["total"], "by_status": bs,
+            "judged": judged, "success_rate": success_rate,
+            "denied_by_gate": denied, "running": running,
+            "elapsed": el,
+        },
+        "attribution": [{"bucket": k, "n": v}
+                        for k, v in sorted(buckets.items(), key=lambda x: (-x[1], x[0]))],
+        "attribution_raw": st["by_attribution"],
+        "tools": {
+            "top": raw["tools"]["top"], "distinct": raw["tools"]["distinct"],
+            "used": raw["tools"].get("used") or [],
+            "usable": len(usable),
+            "never_used": never[:STATS_NEVER_USED_MAX],
+            "never_used_total": len(never),
+        },
+        "traffic": raw["traffic"],
+        "findings": raw["findings"],
+        "flow": raw["flow"],
+        "span": raw["span"],
+        "notes": notes,
+    }
+
+
+@router.get("/stats")
+async def stats_get(request: Request, days: int = 30, top: int = 15, refresh: int = 0):
+    """统计看板数据（只读，快照式）。
+
+    `days=0` 表示全部历史；`refresh=1` 跳过缓存（排障时用）。
+    """
+    require_auth(request)
+    from . import store
+
+    raw_days = int(days)
+    days = max(0, min(raw_days, STATS_MAX_DAYS))
+    top = max(1, min(int(top), STATS_MAX_TOP))
+    now = time.time()
+    since = None if days == 0 else now - days * 86400
+
+    key = f"{days}:{top}"
+    ent = STATS_CACHE.get(key)
+    hit = bool(ent) and not refresh and (now - ent["at"]) < STATS_CACHE_TTL
+    if hit:
+        raw = ent["data"]
+    else:
+        raw = store.console_stats(since, top)
+        # 缓存里存**原始聚合**，派生字段（成功率/桶/notes）每次现算 ——
+        # 否则命中缓存时会把上一次的派生结果连同它的 window/hit 一起回给前端。
+        STATS_CACHE[key] = {"at": now, "data": raw}
+    return _shape_stats(raw, days, since, now, raw_days, hit)
+
+
+# ============================================================ 运行监控（v112）
+# 「实时监控」页的入口列表：跨项目看"现在有哪些运行、各自什么状态、**谁在等我确认**"。
+#
+# 为什么必须是新接口：此前**没有任何"列会话"的口子** ——
+#   · `/api/projects` 只给项目；
+#   · `/api/projects/{pid}` 带 sessions，但要看全部就得走遍每个项目（N+1）；
+#   · `store.list_sessions(None)` 内部存在却没被任何接口暴露。
+# 于是监控页"必须事先知道 sid 才能看"，没法当监控用。
+#
+# ⚠️ 本接口**只读**，且**绝不新造确认/取消通道**：
+# 确认的双闸门（token + step_id + auth_ack）是安全核心，见 `/api/sessions/{sid}/confirm`
+# 的注释。控制台只做「换个界面调用同一个接口」——重写一遍就等于绕过它。
+# 所以这里只列清单，点进去仍调既有 `/confirm`、`/cancel`、`/stream`。
+
+RUNS_DEFAULT_LIMIT = 50
+RUNS_MAX_LIMIT = 200
+
+#: 会话状态 → 给人看的说明。**内存里的 `Session.state` 是权威**（见 _shape_run）。
+#: ⚠️ `cancelling` 刻意**不在**这张表里：它不是 `session.state`，只是 `/cancel` 的返回串。
+#: 真正的"正在取消"必须读 `cancel_event.is_set()`。
+RUN_STATE_LABEL = {
+    "idle": "空闲（可派任务）",
+    "running": "执行中",
+    "awaiting_confirm": "等待人工确认",
+    "done": "已完成",
+    "error": "出错结束",
+    "interrupted": "被中断（服务重启等）",
+}
+#: 这些状态需要人去管 —— 列表要排在前面并高亮
+RUN_URGENT_STATES = ("awaiting_confirm", "interrupted")
+#: 「只看活跃」时的保留集
+RUN_ACTIVE_STATES = ("idle", "running", "awaiting_confirm")
+
+
+def _pending_of(s) -> dict | None:
+    """把「正在等确认的那一步」整理成列表页要用的最小信息。
+
+    ⚠️ 刻意**不返回** SSE `need_confirm` 事件里那个 `second` 字段：它的含义是
+    "这是第几轮"，而 `/api/sessions/{sid}` 里同名的 `second` 是"该步是否需要双轮确认"。
+    同名不同义 —— 本项目的看板脚本就曾拿它当风险等级用、把 L3 印成了 L2
+    （见 main.py 里那段注释）。这里一律用语义明确的名字。
+    """
+    pend = getattr(s, "pending_confirm", None) or {}
+    if getattr(s, "state", "") != "awaiting_confirm" or not pend:
+        return None
+    step_id = str(pend.get("step_id") or "")
+    step = next((x for x in getattr(s, "steps", []) if x.id == step_id), None)
+    lvl = ""
+    if step is not None:
+        lvl = str((getattr(step, "risk", None) or {}).get("level") or "")
+        if not lvl:
+            from .registry import registry as _reg
+            lvl = (_reg.risk_of(getattr(step, "tool_alias", "")) or {}).get("level", "")
+    return {
+        "step_id": step_id,
+        "tool_alias": getattr(step, "tool_alias", "") if step else "",
+        "tool_name": getattr(step, "tool_name", "") if step else "",
+        "target": getattr(step, "target", "") if step else "",
+        "risk_level": lvl,
+        "requires_double_confirm": bool(pend.get("double_confirm")),
+        # token 要给前端才能提交（与 `/api/sessions/{sid}` 同口径）：只在本机回环 +
+        # 控制台口令闸门之后暴露，且是**一次性**、短时有效。
+        "token": str(pend.get("token") or ""),
+    }
+
+
+def _shape_run(sid: str, s, row: dict | None, by_status: dict[str, int],
+               pname: str, now: float) -> dict:
+    """把「内存会话 + 落库快照」合成列表的一行。
+
+    ⭐ **运行状态以内存为准**：`sessions.sessions` 里的 `Session` 才是"现在"，
+    而库里的 `sessions.state` 是**落库时的快照**。服务重启后内存清空，
+    `store.init_db()` 会把库里的 running/awaiting_confirm 统一改成 `interrupted`
+    （避免"僵尸会话永远显示执行中"）—— 那套机制**已经存在，这里不要重造**，
+    但要把它当作一个**行动项**显式展示（可续聊 / 去看半程摘要）。
+    """
+    live = s is not None
+    state = str(getattr(s, "state", "") or "") if live else str((row or {}).get("state") or "unknown")
+    mem: dict[str, int] = {}
+    if live:
+        for st in getattr(s, "steps", []):
+            mem[st.status or "?"] = mem.get(st.status or "?", 0) + 1
+    db = dict(by_status or {})
+    # 两个来源**逐状态取较大值**：步骤是"每步即时落库"的，所以任一侧有的都确实发生过；
+    # 取 max 才不会因为某次落库失败而少报，两侧一致时结果不变。
+    # （只信内存会在"内存对象没装回历史步骤"时少报；只信库会在"还没轮到落库"时少报。）
+    by = {k: max(mem.get(k, 0), db.get(k, 0)) for k in set(mem) | set(db)}
+    total = sum(by.values())
+    pending = _pending_of(s) if live else None
+    # ⚠️ 「正在取消」读的是 cancel_event，**不是** state：`/cancel` 只 set() 事件，
+    # `state` 直到循环跑到下一个步骤边界才变。只看 state 会让界面在这段时间里
+    # 显示成正常的"执行中"，用户以为取消没生效、反复点。
+    cancelling = bool(live and getattr(s, "cancel_event", None) is not None
+                      and s.cancel_event.is_set())
+    return {
+        "session_id": sid,
+        "project_id": str((getattr(s, "project", "") if live else (row or {}).get("project_id")) or ""),
+        "project_name": pname,
+        "title": str((getattr(s, "title", "") if live else (row or {}).get("title")) or ""),
+        "target": str((getattr(s, "target", "") if live else (row or {}).get("target")) or ""),
+        "mode": str((getattr(s, "mode", "") if live else (row or {}).get("mode")) or "blackbox"),
+        "subtask": bool((getattr(s, "subtask", False) if live else (row or {}).get("subtask")) or False),
+        "parent_id": str((getattr(s, "parent_id", "") if live else (row or {}).get("parent_id")) or ""),
+        "state": state,
+        "state_label": RUN_STATE_LABEL.get(state, state),
+        "live": live,
+        "cancelling": cancelling,
+        "awaiting_confirmation": bool(pending),
+        "pending": pending,
+        "awaiting_summary": (f"{pending['tool_alias'] or pending['tool_name']} → "
+                             f"{pending['target'] or '（无目标）'}（风险 {pending['risk_level'] or '?'}）"
+                             if pending else ""),
+        "steps": {"total": total, "by_status": by,
+                  "done": by.get("done", 0), "error": by.get("error", 0),
+                  "denied": by.get("denied", 0)},
+        # 「需要人管」= 在等我确认 或 被中断。列表据此排序并高亮 —— 这是这一页存在的理由。
+        "urgent": state in RUN_URGENT_STATES,
+        "created_at": float((getattr(s, "created_at", 0) if live else (row or {}).get("created_at")) or 0),
+        "summary": str((getattr(s, "summary", "") if live else (row or {}).get("summary")) or ""),
+    }
+
+
+@router.get("/runs")
+async def runs_get(request: Request, limit: int = RUNS_DEFAULT_LIMIT, active: int = 0,
+                   project_id: str = "", mode: str = ""):
+    """运行时会话列表（只读）。`active=1` 只看活跃，`mode` 按工作模式过滤。"""
+    require_auth(request)
+    from . import store
+    from .agent import sessions as live_mgr
+
+    raw_limit = int(limit)
+    n = max(1, min(raw_limit, RUNS_MAX_LIMIT))
+    now = time.time()
+
+    rows = store.list_sessions(None, n)
+    by_sid = {r["id"]: r for r in rows}
+    live = dict(live_mgr.sessions)
+
+    # ⚠️ 内存里刚建、还没跑过的会话**不在库里**（`POST /api/sessions` 只做
+    # `sessions.create`，不落库）—— 只查库会漏掉"刚点开还没发任务"的那一条，
+    # 而它恰恰是用户最想确认"我点开的那个在哪"的。所以并集要补上内存侧。
+    sids = list(by_sid.keys()) + [x for x in live if x not in by_sid]
+    counts = store.session_step_counts(sids)
+    pnames = {p["id"]: (p.get("name") or "") for p in store.list_projects()}
+
+    # ⚠️ 项目名要按"内存优先"取 project_id 再查表：只在内存里的会话在库里没有行，
+    # 用 `(by_sid.get(sid) or {})` 取会得到空串，项目列就会是空的。
+    items = []
+    for sid in sids:
+        sv = live.get(sid)
+        row = by_sid.get(sid)
+        pid = str((getattr(sv, "project", "") if sv is not None
+                   else (row or {}).get("project_id")) or "")
+        items.append(_shape_run(sid, sv, row, counts.get(sid) or {}, pnames.get(pid, ""), now))
+
+    m = (mode or "").strip().lower()
+    if m in ("blackbox", "whitebox"):
+        items = [x for x in items if store.normalize_mode(x["mode"]) == m]
+    if project_id:
+        items = [x for x in items if x["project_id"] == project_id]
+    if int(active or 0):
+        items = [x for x in items if x["state"] in RUN_ACTIVE_STATES]
+
+    # 需要人管的排最前，其余按创建时间倒序
+    items.sort(key=lambda x: (0 if x["urgent"] else 1, -x["created_at"]))
+
+    notes: list[str] = []
+    n_await = sum(1 for x in items if x["awaiting_confirmation"])
+    if n_await:
+        notes.append(f"有 {n_await} 个运行**正等着你确认**：Agent 不点它就会一直停在那一步"
+                     "（超时后该步作废，不会自动放行）。")
+    n_int = sum(1 for x in items if x["state"] == "interrupted")
+    if n_int:
+        notes.append(f"有 {n_int} 个运行是**被中断**的（服务重启或异常结束，落库时统一标成 "
+                     "interrupted —— 否则会永远显示『执行中』这个僵尸状态）。"
+                     "它们没有在跑，但半程成果已沉淀，可以续聊接着做。")
+    n_can = sum(1 for x in items if x["cancelling"])
+    if n_can:
+        notes.append(f"有 {n_can} 个运行**正在取消**（已请求，等当前步骤跑完即收尾）。"
+                     "注意「正在取消」读的是取消事件而不是状态字段 —— state 要跑到下一个"
+                     "步骤边界才变。")
+    n_mem = sum(1 for x in items if x["live"] and x["session_id"] not in by_sid)
+    if n_mem:
+        notes.append(f"有 {n_mem} 个会话只存在于内存（建了但还没派任务，因此还没落库）。"
+                     "服务重启后它们会消失。")
+    if not items:
+        notes.append("当前没有任何运行。列表最多回看 "
+                     f"{n} 条历史；「只看活跃」可过滤掉已结束的。")
+    notes.append("这一页只读：确认与取消都**透传**既有接口"
+                 "（/api/sessions/{sid}/confirm 与 /cancel），不另造通道 —— "
+                 "确认的双闸门（一次性 token + 绑定步骤 + L3 书面授权确认）是安全核心。")
+
+    return {
+        "ok": True,
+        "items": items,
+        "counts": {
+            "total": len(items),
+            "live": sum(1 for x in items if x["live"]),
+            "awaiting": n_await,
+            "cancelling": n_can,
+            "interrupted": n_int,
+            "urgent": sum(1 for x in items if x["urgent"]),
+        },
+        "window": {"limit": n, "requested_limit": raw_limit,
+                   "clamped": n != raw_limit, "active": bool(int(active or 0)),
+                   "project_id": project_id, "mode": m if m in ("blackbox", "whitebox") else ""},
+        "generated_at": now,
+        "live_total": len(live),
+        "run_state_label": RUN_STATE_LABEL,
+        "notes": notes,
+    }

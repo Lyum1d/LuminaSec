@@ -1,0 +1,42 @@
+{
+  "_note": "本机自备工具目录的模板。真正生效的文件是同目录下的 local_tools.json（本项目 .gitignore 忽略它）。把本文件复制成 local_tools.json 再改。也可以在配置控制台的「本地工具」页里添加，不建议手写。",
+
+  "_fields": {
+    "path": "工具目录的**绝对路径**（必填）。不能是盘符根（如 E:\\），扫描器会拒绝。",
+    "label": "显示名（可空，默认取目录名）。",
+    "category": "这一类工具的默认分类（可空，默认等于 label）。子目录里的工具会自动拼成 `<category> · <子目录名>`。",
+    "enabled": "false 可临时停用这个目录而不删除配置。",
+    "java": "目录里 .jar 的默认 java 大版本，取值 JAVA8 / JAVA11（可空，默认 JAVA8）。",
+    "python": "保留字段：目录里 .py 用的解释器。留空 = 自动（外部工具箱自带 python3，没有就用 PATH 里的 python）。",
+    "note": "给自己看的备注，原样回显。",
+    "excluded": ["相对路径列表：这些文件虽然被识别出来了，但不要纳入工具箱"],
+    "overrides": {
+      "相对路径": {
+        "alias": "钉住 alias（空/不写 = 从文件名自动推导）。改了它相当于给工具换个模型可见的名字。",
+        "name": "覆写显示名（它会成为 risk_grades.json 的键）",
+        "type": "覆写工具类型：命令行 / 批处理 / Python / JAVA8 / JAVA11",
+        "category": "覆写分类",
+        "description": "写给模型看的工具说明"
+      }
+    }
+  },
+
+  "_not_here": "风险分级与闸门参数**不写在这个文件里** —— 它们是 data/risk_grades.json（按工具名）与 data/tool_overrides.json（按 alias），在控制台「工具与分级」页改。自备工具与外部工具共用这两份配置，所以是同一套闸门。",
+
+  "_supported_ext": "默认识别：.exe .com（命令行）、.bat .cmd .vbs（批处理）、.py（Python）、.jar（JAVA8）、.url（网页书签，只做书签不进 Agent 清单）。.lnk 快捷方式**刻意不纳入**（目标不在本目录内，见控制台提示）。",
+
+  "version": 1,
+  "roots": [
+    {
+      "id": "rt_example",
+      "path": "E:\\我的工具",
+      "label": "我的自备工具",
+      "category": "自备工具",
+      "enabled": true,
+      "java": "JAVA8",
+      "note": "示例：把 path 换成你自己的目录",
+      "excluded": [],
+      "overrides": {}
+    }
+  ]
+}

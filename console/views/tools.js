@@ -6,7 +6,7 @@
  * 所以后端会一起做乐观锁（两个文件哈希都核对）与失败回滚。
  */
 import { api, esc, modal, toast, alertBox, reload, setFileHint }
-  from '/console-assets/core.js?v=103';
+  from '/console-assets/core.js?v=112';
 
 let ALL = [];          // 全量工具
 let META = {};         // files / levels / editable_fields

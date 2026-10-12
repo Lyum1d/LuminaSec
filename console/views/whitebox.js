@@ -16,7 +16,7 @@
  *   只用 console.css 里既有的类（sec-title / card / kv / mono / diff / toolbar /
  *   grow / pill / alert / hint / empty），**不新增任何 CSS** —— 与既有各页保持一致。
  */
-import { api, esc, modal, toast } from '/console-assets/core.js?v=103';
+import { api, esc, modal, toast } from '/console-assets/core.js?v=112';
 
 let TAB = 'codebases';
 let OVERVIEW = null;

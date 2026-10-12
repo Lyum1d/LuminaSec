@@ -64,6 +64,13 @@ class Tool:
     caps: list = field(default_factory=list)
     # v023.2 扫描器内部流量能力声明（来自 overrides 的 network_control）
     network_control: dict = field(default_factory=dict)
+    # v110：工具**从哪来**。空串 = 外部工具箱清单（`<TOOLBOX_ROOT>/config/tools.json`）；
+    # "local" = 用户自己添加的目录（见 app/local_tools.py）；"builtin" = 内置能力。
+    # 前端据此给自备工具加「自备」徽标 —— 让使用者一眼看出"这个是我自己加的，
+    # 换了机器就没有"，而不是把它和工具箱自带的一视同仁。
+    source: str = ""
+    #: 自备工具的根目录标签（用于界面分组与排障时回答「它在哪个目录里」）
+    root_label: str = ""
 
     def is_builtin(self) -> bool:
         """是不是内置能力（进程内托管，不是磁盘上的程序）。
@@ -93,6 +100,9 @@ class Tool:
             "disabled_reason": self.disabled_reason,
             "interactive": self.interactive,
             "caps": list(self.caps),
+            # v110：来源。空串按"外部工具箱"处理，前端只在 local 时加徽标。
+            "source": self.source,
+            "root_label": self.root_label,
         }
 
 
@@ -222,7 +232,7 @@ class ToolRegistry:
 
         tools_json = config.TOOLBOX_ROOT / "config" / "tools.json"
         if not tools_json.exists():
-            # v056：区分「没配工具箱根目录」与「配了但这个路径下没有清单」——
+            # v056：区分「没配外部工具箱根目录」与「配了但这个路径下没有清单」——
             # 前者是新 clone 的常见状态，含糊的「找不到工具清单」会让人去翻文件系统。
             if not getattr(config, "TOOLBOX_ROOT_SET", True):
                 self.errors.append(config.TOOLBOX_ROOT_HELP)
@@ -238,9 +248,13 @@ class ToolRegistry:
             #
             # 为什么一直没暴露：开发机的工具箱都已配置（tools.json 存在），走的是正常分支；
             # 只有**纯 clone / 新机器 / 发布版**才会走这里 —— 正是最该能用的场景。
+            #
+            # v110：自备工具也在这里载入 —— 它们**同样不依赖外部工具箱**
+            # （根目录是用户自己指的），漏掉这一支就又是"配了自备工具却一个都看不到"。
+            self._add_local_tools()
             self._add_builtin_tools()
             # `loaded` 保持 False：它的语义是「**完整**清单已载入」。外部清单缺失是降级，
-            # 由 self.errors 说明原因；但内置能力已注册，功能不至于全瘫。
+            # 由 self.errors 说明原因；但内置能力与自备工具已注册，功能不至于全瘫。
             return self
 
         raw = json.loads(tools_json.read_text(encoding="utf-8"))
@@ -264,65 +278,233 @@ class ToolRegistry:
                 description=(item.get("description") or "").strip(),
                 scriptable=scriptable,
             )
-
-            tool.alias = ALIAS_OVERRIDES.get(tool.name) or _make_alias(tool.name, rel, used)
+            # 与 v109 逐字等价（含那句"必然成立"的重复生成）—— 见 _alias_external 的说明。
+            tool.alias = ALIAS_OVERRIDES.get(tool.name) or self._alias_external(tool.name, rel, used)
             if tool.alias in used:
-                tool.alias = _make_alias(tool.name, rel, used)
+                tool.alias = self._alias_external(tool.name, rel, used)
             used.add(tool.alias)
+            self._apply_meta(tool, grades, overrides)
+            self._register(tool)
 
-            ov = overrides.get(tool.alias) or overrides.get(tool.name)
-            if ov:
-                tool.disabled = bool(ov.get("disabled"))
-                tool.disabled_reason = ov.get("reason", "")
-                tool.tool_timeout = int(ov.get("timeout") or 0)
-                tool.ignore_exit_code = bool(ov.get("ignore_exit_code"))
-                tool.caveat = ov.get("caveat", "") or ""
-                tool.allowed_flags = list(ov.get("allowed_flags") or [])
-                tool.value_flags = list(ov.get("value_flags") or [])
-                # v012 P2-2：manifest 渐进版——disallowed_flags 黑名单与
-                # target_type 形态声明（url|domain|host），均从 overrides 读入
-                tool.disallowed_flags = list(ov.get("disallowed_flags") or [])
-                tool.target_type = str(ov.get("target_type") or "").strip().lower()
-                # v023.2：扫描器内部速率/并发能力声明（network_control）。
-                # 未声明 = 流量不可观测（executor 会警告；严格模式下拒绝运行）。
-                nc = ov.get("network_control") or {}
-                if isinstance(nc, dict):
-                    tool.network_control = {
-                        "declared": bool(nc.get("declared")),
-                        "supports_rate": bool(nc.get("supports_rate")),
-                        "supports_concurrency": bool(nc.get("supports_concurrency")),
-                        "rate_flags": [str(x) for x in (nc.get("rate_flags") or [])],
-                        "concurrency_flags": [str(x) for x in (nc.get("concurrency_flags") or [])],
-                        "traffic_class": str(nc.get("traffic_class") or "unknown"),
-                    }
-                tool.stdin_input = ov.get("stdin_input", "") or ""
-                # v047：交互式菜单程序不进模型工具清单（见 Tool.interactive 说明）
-                tool.interactive = bool(ov.get("interactive"))
-                tool.interactive_reason = ov.get("interactive_reason", "") or ""
-                # v048：能力标签，供任务级约束闸门用
-                tool.caps = [str(x) for x in (ov.get("caps") or [])]
-
-            if scriptable:
-                g = grades.get(tool.name)
-                if g:
-                    tool.risk_level = g.get("level", config.DEFAULT_RISK_LEVEL)
-                    tool.risk_reason = g.get("reason", "")
-                else:
-                    tool.risk_level = config.DEFAULT_RISK_LEVEL
-                    tool.risk_reason = "未在分级表中定义，按默认 L2 处理"
-                self._resolve_executable(tool)
-            else:
-                # 图形界面 / 网页工具不进流水线，但仍要能在工具箱面板启动
-                if rel and not url:
-                    self._resolve_executable(tool)
-
-            self.tools.append(tool)
-            self._by_name[tool.name] = tool
-            self._by_alias[tool.alias] = tool
-
+        # v110：外部清单之后接自备工具。`used` 传进去是为了让 alias 冲突时能自动改
+        # 后缀而不是互相覆盖 —— 用户给自己的工具起名 "nuclei" 是完全可能的。
+        self._add_local_tools(used, grades, overrides)
         self._add_builtin_tools()
         self.loaded = True
         return self
+
+    # ---------- 单个工具的装配（外部清单与自备工具**共用**）----------
+    def _alias_external(self, name: str, rel_path: str, used: set[str]) -> str:
+        """外部工具箱清单的 alias —— **与 v109 逐字等价（含那个 `_2` 后缀）**。
+
+        ⚠️ 后缀看着像 bug，但**本版刻意冻结**：
+
+        `_make_alias()` 自己会把结果登记进 `used`，于是调用点那句
+        `if tool.alias in used:` **必然成立**、于是每个工具都被生成两次 ⇒
+        197 个外部工具里 **147 个带着无意义的 `_2` 后缀**（`burp_2`、`webshell_2`…）。
+        而 `data/tool_overrides.json` 是**按 alias 索引**的 ——
+        一旦这些 alias 变了，那 147 条覆写（allowed_flags / disallowed_flags /
+        target_type / caps / network_control …）会**静默失效、闸门悄悄变松、不报任何错**。
+
+        所以清理它必须单独做一次**带 alias 迁移**的版本（把旧键改写成新键并自检），
+        不能顺手改。这个方法存在的意义就是让"冻结"这件事在代码里看得见 ——
+        否则下一个人会把它当笔误直接"修好"。
+
+        ⚠️ 本方法**只做一次 `_make_alias`**。那第二遍是在**调用点**发生的
+        （`if tool.alias in used:` 那一行），两处合起来才是 v109 的行为。
+        把第二遍也搬进来会变成四重生成、后缀从 `_2` 变 `_4` —— 已实测踩到一次。
+        """
+        return _make_alias(name, rel_path, used)
+
+    def _alias_local(self, name: str, rel_path: str, used: set[str]) -> str:
+        """自备工具的 alias —— **干净名字**（`_make_alias` 单次调用）。
+
+        与外部工具箱的"冻结"不同：自备工具是**新增**条目，不存在"改了会让存量覆写
+        失联"的问题，所以没有理由继承那个多余后缀（`myscan` 比 `myscan_2` 对
+        小模型的选型友好得多）。
+
+        `pinned` 是用户在控制台钉住的别名：它优先，但**若已被占用仍要退让** ——
+        否则会出现两个工具同 alias，`_by_alias` 只留最后一个，前一个变成
+        "清单里有、按名字查不到"。
+        """
+        return _make_alias(name, rel_path, used)
+
+    def _register(self, tool: Tool) -> None:
+        """把装配好的工具放进三张表。**唯一入口** —— 三条载入路径都走它，
+        避免某一条漏了 `_by_alias` 从而出现「清单里有、按名字查不到」的鬼现象。"""
+        self.tools.append(tool)
+        self._by_name[tool.name] = tool
+        self._by_alias[tool.alias] = tool
+
+    def _apply_meta(self, tool: Tool, grades: dict[str, Any],
+                    overrides: dict[str, Any], base: Path | None = None) -> None:
+        """把「风险分级 + 闸门覆写 + 可执行文件解析」套到一个 Tool 上。
+
+        ⚠️ **必须只有这一份实现**。外部工具箱清单与自备工具目录两条载入路径都走它，
+        所以不变量「两类工具同一套闸门」是**靠共用同一段代码**保证的，
+        而不是靠约定或文档 —— 本项目反复踩过"同一原理落两份实现、迟早漂移"的坑。
+
+        `base` 是相对路径的解析基准：外部工具用 `TOOLBOX_ROOT`（默认），
+        自备工具用**用户自己那个目录**。
+        """
+        ov = overrides.get(tool.alias) or overrides.get(tool.name)
+        if ov:
+            tool.disabled = bool(ov.get("disabled"))
+            tool.disabled_reason = ov.get("reason", "")
+            tool.tool_timeout = int(ov.get("timeout") or 0)
+            tool.ignore_exit_code = bool(ov.get("ignore_exit_code"))
+            tool.caveat = ov.get("caveat", "") or ""
+            tool.allowed_flags = list(ov.get("allowed_flags") or [])
+            tool.value_flags = list(ov.get("value_flags") or [])
+            # v012 P2-2：manifest 渐进版——disallowed_flags 黑名单与
+            # target_type 形态声明（url|domain|host），均从 overrides 读入
+            tool.disallowed_flags = list(ov.get("disallowed_flags") or [])
+            tool.target_type = str(ov.get("target_type") or "").strip().lower()
+            # v023.2：扫描器内部速率/并发能力声明（network_control）。
+            # 未声明 = 流量不可观测（executor 会警告；严格模式下拒绝运行）。
+            nc = ov.get("network_control") or {}
+            if isinstance(nc, dict):
+                tool.network_control = {
+                    "declared": bool(nc.get("declared")),
+                    "supports_rate": bool(nc.get("supports_rate")),
+                    "supports_concurrency": bool(nc.get("supports_concurrency")),
+                    "rate_flags": [str(x) for x in (nc.get("rate_flags") or [])],
+                    "concurrency_flags": [str(x) for x in (nc.get("concurrency_flags") or [])],
+                    "traffic_class": str(nc.get("traffic_class") or "unknown"),
+                }
+            tool.stdin_input = ov.get("stdin_input", "") or ""
+            # v047：交互式菜单程序不进模型工具清单（见 Tool.interactive 说明）
+            tool.interactive = bool(ov.get("interactive"))
+            tool.interactive_reason = ov.get("interactive_reason", "") or ""
+            # v048：能力标签，供任务级约束闸门用
+            tool.caps = [str(x) for x in (ov.get("caps") or [])]
+
+        if tool.scriptable:
+            g = grades.get(tool.name)
+            if g:
+                tool.risk_level = g.get("level", config.DEFAULT_RISK_LEVEL)
+                tool.risk_reason = g.get("reason", "")
+            else:
+                tool.risk_level = config.DEFAULT_RISK_LEVEL
+                tool.risk_reason = "未在分级表中定义，按默认 L2 处理"
+            self._resolve_executable(tool, base)
+        else:
+            # 图形界面 / 网页工具不进流水线，但仍要能在工具箱面板启动
+            if tool.rel_path and not tool.url:
+                self._resolve_executable(tool, base)
+
+    def _add_local_tools(self, used: set[str] | None = None,
+                         grades: dict[str, Any] | None = None,
+                         overrides: dict[str, Any] | None = None) -> int:
+        """载入本机自备工具（用户在 `data/local_tools.json` 里添加的目录）。
+
+        返回成功注册的条数。
+
+        **工具条目每次在这里重新扫描**，而不是持久化一份清单 —— 用户在目录里
+        增删工具后重启即跟随，不需要回来同步。扫描器只读文件系统、**绝不执行任何程序**，
+        且带深度/数量上限与跳过目录黑名单（见 app/local_tools.py）。
+
+        单个目录出问题（路径没了 / 一个工具都没认出来）只记进 `self.errors` 并**继续**，
+        不让一个坏目录把其余目录与内置能力一起带走。
+        """
+        from . import local_tools
+
+        used = used if used is not None else set()
+        grades = grades if grades is not None else self._load_grades()
+        overrides = overrides if overrides is not None else self._load_overrides()
+
+        conf = local_tools.load_config()
+        n = 0
+        for root in conf["roots"]:
+            if not root.get("enabled", True):
+                continue
+            label = root.get("label") or root.get("path") or "（未命名目录）"
+            scan = local_tools.scan_root(root)
+            if not scan["exists"]:
+                self.errors.append(f"自备工具目录不可用（{label}）：{scan['problem']}")
+                continue
+            if not scan["tools"]:
+                self.errors.append(
+                    f"自备工具目录里没识别到工具（{label}）：{root.get('path')} —— "
+                    f"支持的扩展名：{'、'.join(sorted(local_tools.EXT_TYPES))}。")
+                continue
+            base = Path(str(root["path"]))
+            for spec in scan["tools"]:
+                if spec["excluded"]:
+                    continue
+                tool = Tool(
+                    name=spec["name"],
+                    alias="",
+                    category=spec["category"],
+                    type=spec["type"],
+                    rel_path=spec["rel_path"],
+                    url=spec["url"],
+                    description=spec["description"],
+                    scriptable=(spec["type"] in config.SCRIPTABLE_TYPES and not spec["url"]),
+                )
+                tool.source = "local"
+                tool.root_label = str(label)
+                # 自备工具的 alias **刻意不走 ALIAS_OVERRIDES** —— 那张表是为某个
+                # 第三方工具箱的名字写的；用户自己起的名字被它悄悄改名会很困惑。
+                # 用户在 local_tools.json 的 overrides 里显式钉住的别名优先，
+                # 但若它已被占用，退让成自动名（否则 _by_alias 会被覆盖，
+                # 出现"清单里有、按名字查不到"）。
+                ov_alias = str(((root.get("overrides") or {}).get(spec["rel_path"]) or {})
+                               .get("alias") or "").strip()
+                auto = self._alias_local(spec["name"], spec["rel_path"], used)
+                if ov_alias and ov_alias not in used:
+                    tool.alias = ov_alias
+                    used.add(ov_alias)
+                    used.add(auto)
+                else:
+                    tool.alias = auto
+                self._apply_meta(tool, grades, overrides, base=base)
+                self._register(tool)
+                n += 1
+        return n
+
+    def preview_local_root(self, root: dict[str, Any]) -> dict[str, Any]:
+        """扫描一个**尚未纳入**的目录，返回"纳入后会长什么样"（含 alias）。
+
+        控制台的"识别预览"用它。alias 必须在这里定，因为用户看到的预览要与
+        保存后 registry 里的真实 alias 一致 —— 否则界面上写着 `myscan`、
+        存完变成 `myscan_2`，用户会以为保存出错了。
+
+        做法：把当前 registry 已占用的 alias 作为起点，再按 load() 的同一顺序分配。
+        已存在的同名 alias（同一目录重复添加）会被识别出来并标注。
+        """
+        from . import local_tools
+
+        used = {t.alias for t in self.tools}
+        taken = set(used)                     # 只读副本，用来算"这个 alias 会不会被改名"
+        norm = local_tools.normalize_root(root)
+        scan = local_tools.scan_root(norm)
+        if scan["exists"]:
+            ovs = norm["overrides"]
+            for spec in scan["tools"]:
+                plain = self._alias_local(spec["name"], spec["rel_path"], set(taken))
+                pin = str((ovs.get(spec["rel_path"]) or {}).get("alias") or "").strip()
+                if pin and pin not in used:
+                    alias = pin
+                    used.add(pin)
+                    used.add(plain)
+                else:
+                    alias = plain
+                    used.add(alias)
+                spec["alias"] = alias
+                spec["alias_auto"] = plain
+                spec["alias_pinned"] = bool(pin and pin == alias)
+                # 自动名退化成 `tool` / `tool_2` 时**必须让用户看见**：
+                # 中文文件名推导不出 ASCII 别名是常态，而一串 tool_2 对模型选型
+                # 毫无帮助（只能靠 description 猜）。控制台据此标红提示改名。
+                spec["needs_alias"] = (not spec["alias_pinned"]
+                                       and local_tools.alias_looks_placeholder(alias))
+                # conflict = "自动推导的名字被占用、已加后缀"，或"用户钉的别名也被占用"。
+                # 显式告诉用户，免得他以为保存后名字变了是出错。
+                spec["conflict"] = alias != plain
+        scan["root"] = norm
+        scan["existing_ids"] = [r["id"] for r in local_tools.load_config()["roots"]]
+        return scan
 
     def _add_builtin_tools(self) -> None:
         """注册内置工具（不依赖工具箱子进程，由 app/replayer.py 托管执行）。"""
@@ -655,9 +837,8 @@ class ToolRegistry:
                 risk_level=s["risk_level"], risk_reason=s["risk_reason"],
                 scriptable=True, caveat=s["caveat"], executable=s["executable"],
             )
-            self.tools.append(t)
-            self._by_name[t.name] = t
-            self._by_alias[t.alias] = t
+            t.source = "builtin"
+            self._register(t)
 
     def _load_grades(self) -> dict[str, Any]:
         p = config.DATA_DIR / "risk_grades.json"
@@ -732,11 +913,16 @@ class ToolRegistry:
             return "mcp"
         return ""
 
-    def _resolve_executable(self, tool: Tool) -> None:
-        """把相对路径解析为绝对路径，并记录工作目录。"""
+    def _resolve_executable(self, tool: Tool, base: Path | None = None) -> None:
+        """把相对路径解析为绝对路径，并记录工作目录。
+
+        v110：新增 `base`。**默认仍是 `TOOLBOX_ROOT`**（外部工具箱清单走这条），
+        自备工具则传**用户自己那个目录** —— 它们的 rel_path 是相对各自根目录的。
+        """
         if not tool.rel_path:
             return
-        abs_path = config.TOOLBOX_ROOT / tool.rel_path.lstrip("/").replace("/", "\\")
+        root = base if base is not None else config.TOOLBOX_ROOT
+        abs_path = root / tool.rel_path.lstrip("/").replace("/", "\\")
         if abs_path.exists():
             tool.executable = str(abs_path)
             tool.workdir = str(abs_path.parent)
@@ -823,6 +1009,11 @@ class ToolRegistry:
             "web": len(self.web_tools()),
             "missing": sum(1 for t in self.scriptable_tools() if not t.executable),
             "interactive": len(self.interactive_tools()),
+            # v110：按**来源**分账。界面要能回答"这 N 个里有多少是我自己加的"，
+            # 否则用户换台机器后会发现工具少了却不知道少在哪一类。
+            "external": sum(1 for t in self.tools if not t.source),
+            "local": sum(1 for t in self.tools if t.source == "local"),
+            "builtin": sum(1 for t in self.tools if t.source == "builtin"),
         }
 
     # ---------- 风险闸门 ----------
@@ -863,10 +1054,17 @@ class ToolRegistry:
         # 判定由 agent 每轮刷新（见 Agent._refresh_external_tools），失败即视为不可用。
         if self.unavailable_aliases:
             tools = [t for t in tools if t.alias not in self.unavailable_aliases]
-        builtins = [t for t in tools if t.type == "内置"]
-        rest_all = [t for t in tools if t.type != "内置"]
-        rest = rest_all[: max(0, max_tools - len(builtins))]
-        tools = builtins + rest
+        # v110：**自备工具与内置能力一样始终保留，不参与配额竞争。**
+        #
+        # 为什么必须这样：配额只有 40 条，而外部工具箱动辄 197 个工具。
+        # 若自备工具按风险等级去和它们抢，用户"特意加进来"的工具很可能被挤掉 ——
+        # 于是界面上写着"已添加"、模型却永远看不见，这个功能就是假的。
+        # 代价（工具太多会拖慢本地小模型）由用户添加时自己承担：
+        # 控制台会显示识别到的条数，条数偏多时明确提醒。
+        keep = [t for t in tools if t.type == "内置" or t.source == "local"]
+        rest_all = [t for t in tools if not (t.type == "内置" or t.source == "local")]
+        rest = rest_all[: max(0, max_tools - len(keep))]
+        tools = keep + rest
         # v022（测试组 021 整改报告 P2-5）：记录因配额被省略的工具 alias，
         # agent 在 system prompt 明确列出——否则模型会凭空否认某个工具存在
         # （实测 deny httpx，而 httpx 实为 L0 且在 schema 内），浪费决策轮次。

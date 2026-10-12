@@ -101,3 +101,8 @@ data/recall_real.json
 # 批量基准评测集配置（v070）：同样含**本机检出目录的绝对路径**，同理 gitignore。
 # 机制入的是 data/recall_batch.json.example（模板，无本机路径）。
 data/recall_batch.json
+
+# 本机自备工具目录（v1.005）：你自己加的工具目录，含**本机绝对路径**
+# （很可能是带用户名的目录）。与 data/scope.json / data/codebases.json 同级敏感，严禁入库。
+# 机制入的是 data/local_tools.json.example（模板，无本机路径）。
+data/local_tools.json

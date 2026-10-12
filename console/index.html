@@ -69,6 +69,9 @@ try { document.documentElement.setAttribute('data-theme',
       <button class="tab active" data-view="overview">总览</button>
       <button class="tab" data-view="scope">授权白名单</button>
       <button class="tab" data-view="tools">工具与分级</button>
+      <!-- v110：本机自备工具目录（加目录 → 自动识别 → 并入工具箱）。
+           与「工具与分级」是同一件事的两半，所以紧挨着放。 -->
+      <button class="tab" data-view="localtools">本地工具</button>
       <button class="tab" data-view="params">运行参数</button>
       <button class="tab" data-view="rules">合规与模板</button>
       <!-- v102：白盒侧（代码库 / 知识库）—— 与「授权白名单」同类，都是范围/授权性质的写入口 -->
@@ -129,6 +132,6 @@ try { document.documentElement.setAttribute('data-theme',
   </div>
 </div>
 
-<script type="module" src="/console-assets/core.js?v=103"></script>
+<script type="module" src="/console-assets/core.js?v=112"></script>
 </body>
 </html>

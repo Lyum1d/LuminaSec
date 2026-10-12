@@ -7,7 +7,7 @@
  *               只允许改值，键名与其它行原样保留，否则会出现「填了却没生效」）
  */
 import { api, esc, modal, toast, alertBox, reload, setFileHint }
-  from '/console-assets/core.js?v=103';
+  from '/console-assets/core.js?v=112';
 
 let TAB = 'rules';
 

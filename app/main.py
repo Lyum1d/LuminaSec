@@ -678,9 +678,21 @@ async def list_tools(kind: str = "all"):
     # 未配置工具箱时目录里只剩内置工具（executable 是 `builtin://…`），
     # 界面上看着就是「工具全空」，而原因只存在于 registry.errors 里 ⇒
     # 使用者只能翻日志或问人。这里把原因与配置方法直接交给前端展示。
+    #
+    # v110：再补**按来源分账**与**下一步动作**。工具来源现在有三类
+    # （外部工具箱 / 本机自备 / 内置能力），只说"未配置工具箱"会让用户
+    # 以为无路可走 —— 其实加个自己的目录就行。
+    st = registry.stats()
+    local_hint = (
+        f"其中 {st['local']} 个是你本机自备的工具（来自 data/local_tools.json 里登记的目录）。"
+        if st.get("local") else
+        "想让工具变多：在配置控制台的「本地工具」页添加你自己的工具目录"
+        "（程序会自动识别里面的工具），或配置外部工具箱（TOOLBOX_ROOT）。")
     return {"items": [t.to_dict() for t in items], "count": len(items),
             "toolbox_configured": config.TOOLBOX_ROOT_SET,
-            "errors": list(registry.errors)}
+            "errors": list(registry.errors),
+            "stats": st,
+            "local_hint": local_hint}
 
 
 @app.post("/api/tools/launch/{alias}")
