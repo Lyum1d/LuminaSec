@@ -1,33 +1,39 @@
 :root {
-  --bg: #0e1116;
-  --panel: #161a22;
-  --panel-2: #1b202a;
-  --panel-3: #212734;
-  --border: #262c38;
-  --border-soft: #1f2530;
-  --tree-line: #3d4658;
-  --text: #e6e9ef;
-  --muted: #8b93a3;
-  --accent: #6d7cff;
-  --accent-2: #9a6cff;
-  --accent-soft: #1b2033;
+  /* v116：配色对齐起始页的终端绿（原先蓝紫 #6d7cff，和起始页割裂） */
+  --bg: #060a08;
+  --panel: #0d1410;
+  --panel-2: #111a14;
+  --panel-3: #16211a;
+  --border: #1e2d24;
+  --border-soft: #18241d;
+  --tree-line: #2f4438;
+  --text: #d4e4da;
+  --muted: #6f8a7b;
+  --accent: #00e59b;
+  --accent-2: #39c1ff;
+  --accent-soft: #0f2a20;
   --ok: #34d399;
   --warn: #fbbf24;
   --danger: #f87171;
   --placeholder: #5a6270;
   --text-strong: #ffffff;
-  --accent-text: #a5b0ff;
-  --accent2-text: #c4b5fd;
+  --accent-text: #5eead4;
+  --accent2-text: #7dd3fc;
   --reasoning-text: #c9ced9;
-  --code-bg: #0c0f14;
-  --code-text: #d7dce5;
-  --code-cmd: #7dd3fc;
-  --code-output: #9aa4b2;
+  --code-bg: #070d0a;
+  --code-text: #cfe0d6;
+  --code-cmd: #5eead4;
+  --code-output: #7d9a8a;
   --confirm-desc: #d6c08a;
   --scrollbar: #2c3442;
   --scrollbar-hover: #3a4455;
   --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
-  /* ---- 线索图（攻击图 / 因果图）节点类型色 ---- */
+  /* ---- 线索图（攻击图 / 因果图）节点类型色 ----
+     ⚠️ v116：这套**刻意不**跟着品牌绿改。它是分类色板（categorical palette），
+     10 种节点类型要彼此可区分，强行塞进单一色系会让图变得难读 —— 语义清晰
+     优先于配色统一。已知遗留小问题：--g-project 与 --g-thread 都是紫系、
+     --g-evidence 与 --g-accent 都是青系，偏近；那是改之前就有的，本轮不动，
+     免得又引入新的难区分。要治得连图例一起重新设计。 */
   --g-project: #9a6cff;
   --g-thread: #6d7cff;
   --g-evidence: #38bdf8;
@@ -42,30 +48,31 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #f0f2f7;
+  /* v116：亮态强调色用深绿 —— 终端亮绿 #00e59b 在白底上不可读 */
+  --bg: #eef2ef;
   --panel: #ffffff;
   --panel-2: #ffffff;
-  --panel-3: #eef1f6;
-  --border: #e3e7ef;
-  --border-soft: #eef1f6;
-  --tree-line: #c6cedd;
-  --text: #1b2433;
-  --muted: #64748b;
-  --accent: #4f6ef7;
-  --accent-2: #6a4ff0;
-  --accent-soft: #eef1ff;
+  --panel-3: #e9efeb;
+  --border: #dce4de;
+  --border-soft: #e9efeb;
+  --tree-line: #c3d0c8;
+  --text: #16211b;
+  --muted: #5f7169;
+  --accent: #0a8f63;
+  --accent-2: #1f6feb;
+  --accent-soft: #e6f5ee;
   --ok: #16a34a;
   --warn: #d97706;
   --danger: #dc2626;
   --placeholder: #94a3b8;
   --text-strong: #0f172a;
-  --accent-text: #4f6ef7;
-  --accent2-text: #6a4ff0;
+  --accent-text: #0a8f63;
+  --accent2-text: #1f6feb;
   --reasoning-text: #3a4353;
-  --code-bg: #f1f4f9;
-  --code-text: #24292f;
-  --code-cmd: #0e7490;
-  --code-output: #57606a;
+  --code-bg: #f2f6f3;
+  --code-text: #1f2a24;
+  --code-cmd: #0a7d5a;
+  --code-output: #55665d;
   --confirm-desc: #8a6a1f;
   --scrollbar: #cbd2dd;
   --scrollbar-hover: #aeb7c5;
@@ -102,6 +109,18 @@ body {
   grid-template-columns: 260px 1fr 320px;
   height: 100vh;
   transition: grid-template-columns .2s ease;
+  /* v116：入场浮现 —— 与起始页同一套语言（opacity + scale + blur，**不含位移**，
+     免得读起来像"从哪边滑进来"）。起始页跳过来时正好接上，观感是
+     「终端执行了一条命令 → 工作区凝现」。 */
+  animation: appIn .62s cubic-bezier(.22,.61,.36,1) both;
+}
+@keyframes appIn{
+  from{ opacity:0; transform:scale(.99); filter:blur(4px); }
+  to  { opacity:1; transform:none;      filter:blur(0);   }
+}
+/* 系统开了"减少动画"就别播 */
+@media (prefers-reduced-motion: reduce){
+  .app{animation:none}
 }
 .app.right-closed { grid-template-columns: 260px 1fr 0; }
 
@@ -176,7 +195,8 @@ button.icon-btn { font-size: 16px; padding: 6px 10px; line-height: 1; }
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   display: flex; align-items: center; justify-content: center; font-size: 18px;
 }
-.brand-name { font-weight: 650; font-size: 15px; letter-spacing: .3px; }
+.brand-name { font-weight: 650; font-size: 15px; letter-spacing: .3px;
+  font-family: var(--mono); }   /* v116：等宽，和起始页的终端气质统一 */
 .brand-sub { font-size: 11px; color: var(--muted); }
 
 .side-section { padding: 4px 14px 10px; }

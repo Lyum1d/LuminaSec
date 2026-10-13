@@ -1,4 +1,4 @@
-/* SRC 渗透 Agent 控制台前端 — 对话式界面 */
+/* LuminaSec 控制台前端 — 对话式界面 */
 
 /* ---------- v102：工作模式 ----------
  * 模式由起始选择界面（/）经 `/app?mode=` 带进来，落 localStorage 以便下次默认高亮。
@@ -224,7 +224,7 @@ function createAssistant() {
     <div class="avatar">🛡</div>
     <div class="bubble">
       <div class="bubble-meta">
-        <span class="who">SRC Agent</span>
+        <span class="who">LuminaSec</span>
         <span class="meta-tags"></span>
       </div>
       <div class="bubble-steps"></div>
@@ -526,7 +526,7 @@ async function selectProject(pid) {
   $('messages').innerHTML = `
     <div class="welcome" id="welcome">
       <div class="welcome-logo">🛡</div>
-      <div class="welcome-title">SRC 渗透测试编排助手</div>
+      <div class="welcome-title">LuminaSec 渗透测试编排助手</div>
       <div class="welcome-sub">已切换项目。描述你的任务开始测试；发现可疑点可随时「＋ 分支」拆出新线索。</div>
     </div>`;
   loadTree();

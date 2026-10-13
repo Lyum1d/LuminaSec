@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""启动 SRC 渗透 Agent 控制台。
+"""启动 LuminaSec 控制台。
 
 用法：
     python run.py
@@ -191,7 +191,7 @@ def main():
 
     from app import config
 
-    parser = argparse.ArgumentParser(description="SRC 渗透 Agent 控制台")
+    parser = argparse.ArgumentParser(description="LuminaSec 控制台")
     parser.add_argument("--host", default=config.HOST)
     parser.add_argument("--port", type=int, default=config.PORT)
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
@@ -199,9 +199,10 @@ def main():
 
     url = _browser_url(args.host, args.port)
 
-    print("=" * 60)
-    print("  SRC 渗透 Agent · 本地控制台")
-    print("=" * 60)
+    # 大标题（LuminaSec，符号拼成）来自 app/brand.py —— 与 启动控制台.bat
+    # 共用同一份数据，不在这里手抄。
+    from app.brand import banner as _brand_banner
+    print(_brand_banner())
     # v056：未配置时不要说 "./" 与 True（那会让人以为没问题）
     if config.TOOLBOX_ROOT_SET:
         print(f"  工具箱：{config.TOOLBOX_ROOT}")
@@ -210,9 +211,9 @@ def main():
         print(f"  工具箱：**未配置** —— {config.TOOLBOX_ROOT_HELP}")
     print(f"  模型：{config.OLLAMA_MODEL} @ {config.OLLAMA_BASE_URL}")
     print(f"  地址：{url}")
-    print("=" * 60)
+    print("=" * 59)
     print("  仅限已获得书面授权的目标测试。")
-    print("=" * 60)
+    print("=" * 59)
 
     _warn_if_exposed(args.host)
 

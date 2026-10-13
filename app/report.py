@@ -222,7 +222,7 @@ def render_project_report(project_id: str) -> str:
         L.append("")
 
     L.append("\n---\n")
-    L.append("\n> 本报告由本地 SRC 渗透 Agent 生成。所有操作均应在获得书面授权的前提下进行。\n")
+    L.append("\n> 本报告由本地 LuminaSec 生成。所有操作均应在获得书面授权的前提下进行。\n")
 
     return "\n".join(L)
 

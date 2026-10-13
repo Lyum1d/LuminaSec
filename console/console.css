@@ -1,4 +1,4 @@
-/* SRC Agent 配置控制台（v050）
+/* LuminaSec 配置控制台（v050）
  *
  * 主题机制与作战界面 web/style.css 保持一致：:root[data-theme="dark"|"light"]，
  * 共用 localStorage 键 src_theme。两套变量都定义齐全 —— 不做「只调一半」的暗色。

@@ -3,220 +3,449 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SRC Agent · 选择工作模式</title>
+<title>LuminaSec · 选择工作模式</title>
 <!--
-  起始选择界面（v102 新增）。
+  起始选择界面（v102 新增；v115 终端化重做；v116 调两点）。
 
-  为什么单独做一页，而不是在 web 界面里弹窗：
+  ── 为什么单独做一页，而不是在 web 界面里弹窗 ──
     · 后续会继续加新入口（例如「CTF 专项」），弹窗式的二选一很快就不够用；
     · 独立页可以在**进入工作区之前**就把模式定下来，避免"先进去、再回头改"；
     · 与主 UI / 控制台解耦 —— 三者互不影响（沿用主 UI「一个字节都不动」的同款约定）。
 
-  本页自包含（样式内联），只用 /static 下的主题变量约定，不依赖 style.css。
+  ── 三段式 ──
+    ① 背景：矩阵雨 canvas —— 纯装饰，颜色跟随亮/暗
+    ② 开场：打字机启动日志，10 行，打完**从 DOM 彻底移除**
+    ③ 主体：终端 CLI 模式选择
+
+  ── v116 改动一：撤掉色调，改黑白，默认按系统时间 ──
+    v115 做了 5 套彩色色调，实际用下来是"第一次新鲜、之后不知道选哪个"。
+    改成**亮/暗两态**，且**首次访问按系统时间自动选**（07:00–19:00 亮，其余暗），
+    之后尊重用户的手动选择。键仍是 src_theme（与主 UI 同一个，两边不会打架）。
+    为什么不做成"随时间自动来回切"：人坐在屏幕前时被界面突然变色会打断注意力，
+    所以自动只发生在**首次**（键不存在时），手动一旦选过就固定。
+
+  ── v116 改动二：A 必须在日志原址平齐淡入 ──
+    v115 是「日志在上、A 在下」的普通文档流，日志移除后 A 整体上移，
+    观感是"被顶上来"。现在两者放进**同一个 grid 单元**（grid-area:1/1），
+    始终占同一块区域：日志淡出的同时 A 在原地浮现，**布局零位移**。
+
+  ── 三条自我保护（缺一会变成"好看但烦人"）──
+    · prefers-reduced-motion 时矩阵雨与打字机**整个不启动**，直接呈现终态；
+    · 页面不可见时停 requestAnimationFrame（切标签页不烧 CPU）；
+    · 任意键 / 点右下角提示可跳过开场 —— 它最多惊艳一次，不能变成开机广告。
+
+  ── 数据诚实 ──
+    启动日志里的内容全部是**产品真实静态事实**（19 个内置能力、72 条 sink、
+    30 req/600s 流量预算……），**没有编造任何运行期数据**。
+    要显示真实运行态请调 /api/health，不要在这里写死假数字。
+
+  本页自包含（样式内联），不依赖 style.css。
 -->
 <style>
   :root{
-    --bg:#0f1318; --panel:#161c23; --panel2:#1b232c; --line:#26313c;
-    --fg:#e6edf3; --fg-dim:#93a1b1; --accent:#4c8dff; --accent2:#7c5cff;
-    --ok:#39b57a; --warn:#e0a23c;
-    --shadow:0 10px 30px rgba(0,0,0,.45);
+    --bg:#04070a; --panel:rgba(8,14,11,.86); --panel2:rgba(13,22,17,.9);
+    --line:#1c2f26; --line2:#26402f;
+    --fg:#c3d8cd; --fg-dim:#5f7d6c; --acc:#00e59b; --acc2:#39c1ff;
+    --warn:#ffb02e;
+    --mono:"JetBrains Mono","Cascadia Code",Consolas,"Courier New",monospace;
   }
+  /* 亮态：终端绿在白底上不可读，所以强调色换深绿、辉光取消、扫描线压淡 */
   html[data-theme="light"]{
-    --bg:#f4f6f9; --panel:#ffffff; --panel2:#f7f9fc; --line:#dde3ea;
-    --fg:#1c2430; --fg-dim:#5b6a7d; --accent:#1f6feb; --accent2:#6b4ff0;
-    --ok:#1f9254; --warn:#9a6b00;
-    --shadow:0 10px 30px rgba(20,30,50,.12);
+    --bg:#eef1f5; --panel:rgba(255,255,255,.88); --panel2:rgba(255,255,255,.96);
+    --line:#d0d9e2; --line2:#bcc8d4;
+    --fg:#16202b; --fg-dim:#5a6b7d; --acc:#0a8f63; --acc2:#1f6feb;
+    --warn:#9a6b00;
   }
   *{box-sizing:border-box}
   body{
     margin:0; min-height:100vh; background:var(--bg); color:var(--fg);
-    font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    font:14px/1.65 var(--mono); padding:36px 20px; position:relative; overflow-x:hidden;
     display:flex; flex-direction:column; align-items:center; justify-content:center;
-    padding:40px 20px;
+    transition:background .5s ease, color .5s ease;
   }
-  .head{text-align:center; margin-bottom:28px}
-  .head h1{margin:0 0 8px; font-size:26px; letter-spacing:.5px}
-  .head p{margin:0; color:var(--fg-dim); font-size:14px}
-  .head .sub{margin-top:10px; font-size:12.5px; color:var(--fg-dim)}
+  /* ---- 矩阵雨 ---- */
+  #rain{position:fixed; inset:0; z-index:0; opacity:.32}
+  html[data-theme="light"] #rain{opacity:.22}
+  .veil{position:fixed; inset:0; z-index:1; pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%,rgba(0,0,0,.3) 0%,rgba(0,0,0,.88) 74%);
+    transition:background .5s ease}
+  html[data-theme="light"] .veil{
+    background:radial-gradient(ellipse at 50% 42%,rgba(255,255,255,.3) 0%,rgba(255,255,255,.86) 74%)}
+  /* ---- 终端扫描线 ---- */
+  .scan{position:fixed; inset:0; z-index:2; pointer-events:none;
+    background:repeating-linear-gradient(180deg,transparent 0 2px,rgba(0,0,0,.15) 2px 3px)}
+  html[data-theme="light"] .scan{
+    background:repeating-linear-gradient(180deg,transparent 0 2px,rgba(0,0,0,.04) 2px 3px)}
+  .wrap{width:100%; max-width:880px; margin:0 auto; position:relative; z-index:3}
 
-  .grid{
-    display:grid; gap:18px; width:100%; max-width:920px;
-    grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
-  }
-  .card{
-    position:relative; text-align:left; cursor:pointer;
-    background:var(--panel); border:1px solid var(--line); border-radius:14px;
-    padding:22px 20px 20px; color:inherit; font:inherit;
-    transition:transform .14s ease, border-color .14s ease, box-shadow .14s ease;
-  }
-  .card:hover{transform:translateY(-3px); border-color:var(--accent); box-shadow:var(--shadow)}
-  .card:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
-  .card .ico{font-size:30px; line-height:1}
-  .card h2{margin:12px 0 6px; font-size:18px}
-  .card .desc{margin:0 0 12px; color:var(--fg-dim); font-size:13.5px}
-  .card ul{margin:0; padding-left:18px; color:var(--fg-dim); font-size:12.5px}
-  .card ul li{margin:3px 0}
-  .card .tagline{
-    display:inline-block; margin-top:12px; padding:2px 9px; border-radius:999px;
-    font-size:11.5px; border:1px solid var(--line); color:var(--fg-dim);
-    background:var(--panel2);
-  }
-  .card.wb{border-left:3px solid var(--accent2)}
-  .card.bb{border-left:3px solid var(--accent)}
+  /* ================= 舞台：日志与 A 占同一格，布局零位移 ================= */
+  .stage{display:grid; width:100%}
+  .stage > section{grid-area:1 / 1; min-width:0}
 
-  .last{
-    display:none; margin-top:6px; font-size:11.5px; color:var(--ok);
-    border:1px solid var(--ok); border-radius:999px; padding:1px 8px;
+  /* ---- 阶段一：启动序列 ---- */
+  #boot{font-size:12.5px; color:var(--fg-dim); white-space:pre-wrap;
+    word-break:break-all; transition:opacity .34s ease}
+  #boot.gone{opacity:0}
+  #boot .ok{color:var(--acc)} #boot .inf{color:var(--acc2)} #boot .dim{opacity:.62}
+  #boot .cursor{display:inline-block;width:8px;height:15px;background:var(--acc);
+    vertical-align:-2px;animation:blink 1s steps(1) infinite;box-shadow:0 0 9px var(--acc)}
+  @keyframes blink{50%{opacity:0}}
+  .skip{position:fixed; right:16px; bottom:14px; font-size:11px; color:var(--fg-dim);
+    z-index:50; opacity:.8; letter-spacing:.4px}
+
+  /* ---- 阶段二：终端 CLI（A）—— 浮现入场 ---- */
+  /* opacity + scale + blur 三段并行，**不含任何位移**：
+     位移会给出"从哪个方向来"的暗示，而"浮现"不该有方向。 */
+  #main{
+    opacity:0; transform:scale(.985); filter:blur(5px);
+    transition:opacity .78s cubic-bezier(.22,.61,.36,1),
+               transform .78s cubic-bezier(.22,.61,.36,1),
+               filter .78s cubic-bezier(.22,.61,.36,1);
   }
-  .card.is-last .last{display:inline-block}
+  #main.on{opacity:1; transform:scale(1); filter:blur(0)}
+
+  .statusbar{
+    display:flex; gap:18px; flex-wrap:wrap; align-items:center; font-size:11.5px;
+    color:var(--fg-dim); letter-spacing:.4px; border:1px solid var(--line);
+    background:var(--panel); padding:7px 14px; border-radius:3px; margin-bottom:24px;
+    backdrop-filter:blur(3px);
+  }
+  .statusbar b{color:var(--acc); font-weight:600}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--acc);
+    box-shadow:0 0 8px var(--acc); margin-right:6px; vertical-align:1px;
+    animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.35}}
+
+  .boot-line{font-size:12px; color:var(--fg-dim); margin-bottom:13px}
+  .boot-line .p{color:var(--acc)}
+  pre.art{
+    margin:0; font:inherit; line-height:1.15; color:var(--acc); font-size:13px;
+    text-shadow:0 0 14px rgba(0,229,155,.45),0 0 3px rgba(0,229,155,.65);
+    overflow-x:auto; transition:color .4s ease;
+  }
+  /* 亮态取消辉光（绿光晕在白底上像脏污），换成一点向下的实阴影 */
+  html[data-theme="light"] pre.art{text-shadow:0 1px 0 rgba(0,0,0,.06)}
+  .cursor2{display:inline-block;width:9px;height:17px;background:var(--acc);
+    vertical-align:-3px; margin-left:4px; animation:blink 1.05s steps(1) infinite;
+    box-shadow:0 0 10px var(--acc)}
+  .tagline{margin:16px 0 26px; color:var(--fg-dim); font-size:13px}
+  .tagline b{color:var(--fg); font-weight:600}
+  .hr{height:1px; background:linear-gradient(90deg,var(--line2),transparent); margin:20px 0}
+
+  .modes{display:flex; flex-direction:column; gap:10px}
+  .mode{
+    display:grid; grid-template-columns:34px 1fr auto; gap:14px; align-items:start;
+    background:var(--panel); border:1px solid var(--line); border-left:2px solid var(--line);
+    padding:15px 18px; cursor:pointer; text-align:left; color:inherit; font:inherit;
+    border-radius:2px; transition:background .12s, border-color .12s, transform .12s;
+    backdrop-filter:blur(3px);
+  }
+  .mode:hover{background:var(--panel2); border-color:var(--acc); border-left-color:var(--acc);
+    transform:translateX(3px)}
+  .mode:focus-visible{outline:1px solid var(--acc); outline-offset:2px}
+  .mode .idx{font-size:19px; color:var(--fg-dim); font-weight:600; padding-top:1px; transition:color .12s}
+  .mode:hover .idx{color:var(--acc)}
+  .mode .nm{font-size:15.5px; color:var(--fg); font-weight:600; margin-bottom:5px}
+  .mode .nm .ico{margin-right:8px; font-size:15px}
+  .mode .ds{font-size:12.5px; color:var(--fg-dim); margin-bottom:8px}
+  .mode ul{margin:0; padding-left:16px; font-size:12px; color:var(--fg-dim); opacity:.92}
+  .mode ul li{margin:2px 0}
+  .mode .meta{font-size:11px; color:var(--fg-dim); text-align:right; white-space:nowrap; padding-top:3px}
+  .mode .meta .k{color:var(--acc2)}
+  .mode.bb:hover{border-left-color:var(--acc2)}
+  .mode.bb:hover .idx{color:var(--acc2)}
+  .mode.disabled{cursor:not-allowed; opacity:.5}
+  .mode.disabled:hover{transform:none; background:var(--panel); border-color:var(--line);
+    border-left-color:var(--warn)}
+  .mode .soon{color:var(--warn); border:1px solid var(--warn); padding:1px 7px;
+    border-radius:2px; font-size:10.5px}
+  .mode .last{color:var(--acc); border:1px solid var(--acc); padding:1px 7px;
+    border-radius:2px; font-size:10.5px}
 
   .foot{
-    margin-top:26px; display:flex; gap:14px; align-items:center;
-    color:var(--fg-dim); font-size:12.5px; flex-wrap:wrap; justify-content:center;
+    margin-top:26px; padding-top:16px; border-top:1px solid var(--line);
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--fg-dim);
   }
-  .foot a{color:var(--accent); text-decoration:none}
-  .foot a:hover{text-decoration:underline}
-  .foot button{
-    background:var(--panel); color:var(--fg); border:1px solid var(--line);
-    border-radius:8px; padding:6px 12px; cursor:pointer; font:inherit; font-size:12.5px;
-  }
-  .foot button:hover{border-color:var(--accent)}
+  .foot button,.foot a{background:transparent; color:var(--fg-dim); border:1px solid var(--line);
+    padding:5px 12px; cursor:pointer; font:inherit; font-size:12px; text-decoration:none;
+    border-radius:2px; transition:.12s}
+  .foot button:hover,.foot a:hover{color:var(--acc); border-color:var(--acc)}
+  .foot .sp{flex:1}
+  .foot .hint{font-size:11.5px; opacity:.75}
+  /* 亮暗切换：图标 + 当前时段说明（让用户知道现在是自动选的还是手选的） */
+  .themebtn{display:inline-flex; align-items:center; gap:6px}
+  .themebtn .tg{font-size:12.5px; line-height:1}
+  .themebtn .wd{font-size:11px; opacity:.75}
 
-  /* 预留：新模式卡片的"即将支持"态 */
-  .card.disabled{cursor:not-allowed; opacity:.55}
-  .card.disabled:hover{transform:none; border-color:var(--line); box-shadow:none}
-  .card.disabled .tagline{border-color:var(--warn); color:var(--warn)}
+  /* ---- 进入工作区的过渡层 ----
+     点模式卡片后先盖一层「正在执行命令」的终端画面，再跳 /app。
+     这样做是因为两个页面之间没有共享的动画上下文，直接跳转会很硬；
+     而 /app 自己也有一个入场浮现（style.css 的 appIn），两头一接，
+     读起来就是「终端执行了一条命令 → 工作区凝现」。 */
+  #trans{
+    position:fixed; inset:0; z-index:200; display:grid; place-items:center;
+    background:var(--bg); opacity:0; pointer-events:none;
+    transition:opacity .42s ease;
+  }
+  #trans.on{opacity:1; pointer-events:auto}
+  #trans .tc{font-size:13px; color:var(--fg-dim); text-align:left; max-width:90vw}
+  #trans .cmd{color:var(--fg); margin-bottom:12px; word-break:break-all}
+  #trans .cmd .p{color:var(--acc)}
+  #trans .row{display:flex; align-items:center; gap:9px}
+  #trans .sp{width:11px;height:11px;border-radius:50%;border:2px solid var(--line2);
+    border-top-color:var(--acc); animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #trans .cur{display:inline-block;width:8px;height:15px;background:var(--acc);
+    vertical-align:-2px; animation:blink 1s steps(1) infinite}
+
+  @media (prefers-reduced-motion: reduce){
+    #rain{display:none} .scan{display:none}
+    .dot,.cursor,.cursor2{animation:none}
+    #main{transition:opacity .01s} /* 仍要能显形，只是不要动画 */
+  }
 </style>
 </head>
 <body>
-  <div class="head">
-    <h1>SRC 渗透 Agent</h1>
-    <p>请选择本次要进入的工作模式</p>
-    <div class="sub">模式决定<b>界面布局</b>与<b>可用的工具集</b>；进入后随时可在顶部切换。</div>
-  </div>
+<canvas id="rain"></canvas>
+<div class="veil"></div>
+<div class="scan"></div>
 
-  <div class="grid" id="modes"><!-- 由下方脚本渲染 --></div>
+<div class="wrap">
+  <div class="stage">
+    <!-- 阶段一：启动序列 -->
+    <section id="boot"></section>
 
-  <div class="foot">
-    <button id="lastBtn" style="display:none">↵ 用上次的模式直接进入</button>
-    <a href="/console" target="_blank" rel="noopener">配置控制台 →</a>
-    <button id="themeBtn">🌙 切换主题</button>
+    <!-- 阶段二：终端 CLI -->
+    <section id="main">
+      <div class="statusbar">
+        <span><span class="dot"></span><b>ONLINE</b></span>
+        <span>local://127.0.0.1:8770</span>
+        <span class="sp" style="flex:1"></span>
+        <span id="clock">--:--:--</span>
+      </div>
+
+      <div class="boot-line"><span class="p">luminasec@local</span>:~$ ./luminasec --select-mode</div>
+      <pre class="art">    __                    _             _____
+   / /   __  ______ ___  (_)___  ____ _/ ___/___  _____
+  / /   / / / / __ `__ \/ / __ \/ __ `/\__ \/ _ \/ ___/
+ / /___/ /_/ / / / / / / / / / / /_/ /___/ /  __/ /__
+/_____/\__,_/_/ /_/ /_/_/_/ /_/\__,_//____/\___/\___/<span class="cursor2"></span></pre>
+      <div class="tagline">渗透测试编排平台 · 请选择本次要进入的<b>工作模式</b>（模式决定界面布局与可用工具集，进入后可在顶部切换）</div>
+
+      <div class="hr"></div>
+      <div class="modes" id="modes"></div>
+
+      <div class="foot">
+        <button id="lastBtn" style="display:none">↵ 用上次的模式直接进入</button>
+        <a href="/console" target="_blank" rel="noopener">配置控制台</a>
+        <span class="sp"></span>
+        <span class="hint">按 1 / 2 快速进入</span>
+        <button id="themeBtn" class="themebtn" title="切换亮/暗（首次访问按系统时间自动选）">
+          <span class="tg">☀️</span><span class="wd" id="themeWord">日间</span>
+        </button>
+      </div>
+    </section>
   </div>
+</div>
+<div class="skip">按任意键跳过启动动画</div>
+
+<!-- 进入工作区的过渡层（点模式卡片后盖住一瞬，再跳 /app） -->
+<div id="trans"><div class="tc">
+  <div class="cmd"><span class="p">luminasec@local</span>:~$ <span id="transCmd"></span></div>
+  <div class="row"><span class="sp"></span><span>entering workspace</span><span class="cur"></span></div>
+</div></div>
 
 <script>
 /* ============================================================================
-   模式注册表 —— 新增模式只改这一个数组
-   ============================================================================
-   字段说明：
-     id      必填，唯一标识；会作为 /app?mode=<id> 传下去，也是 localStorage 的键值
-     name    卡片标题
-     icon    卡片图标（emoji 即可）
-     desc    一句话说明
-     bullets 3~4 条要点（界面/工具集差异写清楚）
-     cls     可选，卡片着色类（bb=黑盒蓝 / wb=白盒紫）
-     ready   false 时渲染为「即将支持」，不可点击（用于预留位）
-     status  未 ready 时显示的文字
-   ============================================================================ */
-const MODES = [
-  {
-    id: 'blackbox',
-    name: '黑盒侧测试',
-    icon: '🌐',
-    cls: 'bb',
-    desc: '面向已授权的目标域名/IP，做外部侦察与漏洞验证。',
-    bullets: [
-      '工具集：你配置的外部工具箱 + 本机自备工具目录 + 内置能力（不含 code_*）',
-      '项目按「授权域名」组织，受授权白名单约束',
-      '沿用现有界面：项目 / 工具箱 / 报告 / 因果图',
-    ],
-  },
-  {
-    id: 'whitebox',
-    name: '白盒侧测试',
-    icon: '📦',
-    cls: 'wb',
-    desc: '面向本机源码目录，做代码审计（入库 → 索引 → 查 sink → 逆向）。',
-    bullets: [
-      '工具集：只放 code_*（ingest / index / search / read / list）',
-      '项目按「代码库」组织，入库即记录一条授权',
-      '新增白盒面板：已入库代码库 / 建索引状态 / 候选检索',
-    ],
-  },
-  // ↓↓↓ 预留位：以后加新模式照抄一段即可（例如 CTF 专项）
-  {
-    id: 'ctf',
-    name: 'CTF 专项',
-    icon: '🚩',
-    cls: '',
-    desc: '面向 CTF 赛题（Web / Misc / Reverse）的解题模式。',
-    bullets: ['解题向工具与提示词', '按题目而非授权域名组织'],
-    ready: false,
-    status: '即将支持',
-  },
-];
+   〇、亮/暗 —— 首次按系统时间自动选，之后尊重手动选择
+   键用 src_theme（与主 UI 同一个），所以两边永远不会打架。
+   刻意**不**做成"随时间自动来回切"：人坐在屏幕前时界面突然变色会打断注意力。
+   ========================================================================== */
+const LS_THEME = 'src_theme';
+const DAY_START = 7, DAY_END = 19;          // 07:00–19:00 算日间（亮）
 
-const LS_MODE = 'src_mode';       // 记住上次选择（与 web/app.js 约定一致）
-const LS_THEME = 'src_theme';     // 与主 UI 同一套主题键
+function autoTheme(){
+  const h = new Date().getHours();
+  return (h >= DAY_START && h < DAY_END) ? 'light' : 'dark';
+}
+/* 矩阵雨两套配色：暗态黑底拖黑尾、亮态白底拖白尾（否则亮态下是一片黑污） */
+const RAIN = {
+  dark:  { fade:'rgba(0,0,0,.09)',   rain:'#00c55f', rainHi:'#d8ffe8' },
+  light: { fade:'rgba(255,255,255,.10)', rain:'#0f9d6b', rainHi:'#7d8a99' },
+};
+let rainTheme = RAIN.dark;
 
-/* ---------- 主题 ---------- */
-(function initTheme(){
-  let t = 'dark';
-  try { t = localStorage.getItem(LS_THEME) || 'dark'; } catch(e){}
+function applyTheme(t, persist){
   document.documentElement.setAttribute('data-theme', t);
-})();
+  rainTheme = RAIN[t] || RAIN.dark;
+  const btn = document.getElementById('themeBtn');
+  btn.querySelector('.tg').textContent = t === 'light' ? '☀️' : '🌙';
+  btn.title = t === 'light' ? '当前：日间（亮）· 点击切到夜间' : '当前：夜间（暗）· 点击切到日间';
+  document.getElementById('themeWord').textContent = t === 'light' ? '日间' : '夜间';
+  if (persist){ try { localStorage.setItem(LS_THEME, t); } catch(e){} }
+}
+let storedTheme = null;
+try { storedTheme = localStorage.getItem(LS_THEME); } catch(e){}
+applyTheme(storedTheme || autoTheme(), !storedTheme);   // 无记录才落盘（把自动结果告诉主 UI）
+
 document.getElementById('themeBtn').addEventListener('click', () => {
-  const cur = document.documentElement.getAttribute('data-theme');
-  const nxt = cur === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', nxt);
-  try { localStorage.setItem(LS_THEME, nxt); } catch(e){}
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light', true);
 });
 
-/* ---------- 记住/进入 ---------- */
-let lastMode = '';
-try { lastMode = localStorage.getItem(LS_MODE) || ''; } catch(e){}
+/* ============================================================================
+   一、矩阵雨背景
+   三条自我保护，缺一会变成"好看但烦人"：
+    ① prefers-reduced-motion 时整个不启动（CSS 里也 display:none 兜底）
+    ② 页面不可见时停 rAF（省电，笔记本风扇会感谢你）
+    ③ 低透明度 + 径向暗角，保证正文可读（不然就是"装饰吃掉内容"）
+   ========================================================================== */
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const cv = document.getElementById('rain'), cx = cv.getContext('2d');
+const CH = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎ0123456789LUMINASEC';
+let cols, drops, W, H, rafId = null;
+function size(){
+  W = cv.width = innerWidth; H = cv.height = innerHeight;
+  cols = Math.floor(W / 16);
+  drops = Array.from({length: cols}, () => Math.random() * -H);
+}
+function frame(){
+  cx.fillStyle = rainTheme.fade; cx.fillRect(0, 0, W, H);
+  cx.font = '14px monospace';
+  for (let i = 0; i < cols; i++){
+    const ch = CH[(Math.random() * CH.length) | 0];
+    cx.fillStyle = Math.random() < .06 ? rainTheme.rainHi : rainTheme.rain;
+    cx.fillText(ch, i * 16, drops[i]);
+    drops[i] = drops[i] > H && Math.random() > .975 ? 0 : drops[i] + 16;
+  }
+  rafId = requestAnimationFrame(frame);
+}
+function startRain(){ if (!rafId && !document.hidden) rafId = requestAnimationFrame(frame); }
+function stopRain(){ if (rafId){ cancelAnimationFrame(rafId); rafId = null; } }
+if (!REDUCED){
+  size(); addEventListener('resize', size);
+  document.addEventListener('visibilitychange', () => document.hidden ? stopRain() : startRain());
+  startRain();
+}
 
+/* ============================================================================
+   二、模式注册表
+   ========================================================================== */
+const MODES = [
+  { id:'blackbox', name:'黑盒侧测试', icon:'🌐', cls:'bb', meta:'EXTERNAL',
+    desc:'面向已授权的目标域名/IP，做外部侦察与漏洞验证。',
+    bullets:['工具集：外部工具箱 + 本机自备目录 + 内置能力（不含 code_*）',
+             '项目按「授权域名」组织，受授权白名单约束',
+             '沿用现有界面：项目 / 工具箱 / 报告 / 因果图'] },
+  { id:'whitebox', name:'白盒侧测试', icon:'📦', cls:'wb', meta:'SOURCE',
+    desc:'面向本机源码目录，做代码审计（入库 → 索引 → 查 sink → 逆向）。',
+    bullets:['工具集：只放 code_*（ingest / index / search / read / list）',
+             '项目按「代码库」组织，入库即记录一条授权',
+             '新增白盒面板：已入库代码库 / 建索引状态 / 候选检索'] },
+  { id:'ctf', name:'CTF 专项', icon:'🚩', cls:'', meta:'RESERVED',
+    desc:'面向 CTF 赛题（Web / Misc / Reverse）的解题模式。',
+    bullets:['解题向工具与提示词','按题目而非授权域名组织'],
+    ready:false, status:'即将支持' },
+];
+const LS_MODE = 'src_mode';
+let lastMode = ''; try { lastMode = localStorage.getItem(LS_MODE) || ''; } catch(e){}
 function enter(id){
   try { localStorage.setItem(LS_MODE, id); } catch(e){}
-  location.href = '/app?mode=' + encodeURIComponent(id);
+  const url = '/app?mode=' + encodeURIComponent(id);
+  /* reduced-motion 或过渡层缺失时直接跳，不留空窗 */
+  const ov = document.getElementById('trans');
+  if (REDUCED || !ov){ location.href = url; return; }
+  document.getElementById('transCmd').textContent = './luminasec run --mode ' + id;
+  ov.classList.add('on');
+  setTimeout(() => { location.href = url; }, 460);
 }
-
-/* ---------- 渲染卡片 ---------- */
 const host = document.getElementById('modes');
-MODES.forEach(m => {
-  const card = document.createElement('button');
-  card.type = 'button';
-  card.className = 'card ' + (m.cls || '') + (m.ready === false ? ' disabled' : '')
-                   + (m.id === lastMode ? ' is-last' : '');
-  card.innerHTML = `
-    <div class="ico">${m.icon}</div>
-    <h2>${m.name}</h2>
-    <span class="last">上次使用</span>
-    <p class="desc">${m.desc}</p>
-    <ul>${(m.bullets || []).map(b => `<li>${b}</li>`).join('')}</ul>
-    ${m.ready === false ? `<span class="tagline">${m.status || '即将支持'}</span>` : ''}
-  `;
-  if (m.ready === false){
-    card.addEventListener('click', () => {});
-    card.title = m.status || '即将支持';
-  } else {
-    card.addEventListener('click', () => enter(m.id));
-  }
-  host.appendChild(card);
+MODES.forEach((m, i) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'mode ' + (m.cls || '') + (m.ready === false ? ' disabled' : '');
+  b.innerHTML = `
+    <div class="idx">${String(i+1).padStart(2,'0')}</div>
+    <div>
+      <div class="nm"><span class="ico">${m.icon}</span>${m.name}
+        ${m.id === lastMode ? '<span class="last" style="margin-left:8px">上次使用</span>' : ''}</div>
+      <div class="ds">${m.desc}</div>
+      <ul>${(m.bullets||[]).map(x=>`<li>${x}</li>`).join('')}</ul>
+    </div>
+    <div class="meta">${m.ready === false
+      ? `<span class="soon">${m.status}</span>`
+      : `<span class="k">▸</span> ${m.meta}`}</div>`;
+  if (m.ready === false){ b.addEventListener('click', () => {}); b.title = m.status; }
+  else b.addEventListener('click', () => enter(m.id));
+  host.appendChild(b);
+});
+const lb = document.getElementById('lastBtn');
+if (lastMode && MODES.some(m => m.id === lastMode && m.ready !== false)){
+  lb.style.display = ''; lb.addEventListener('click', () => enter(lastMode));
+}
+document.addEventListener('keydown', e => {
+  const u = MODES.filter(m => m.ready !== false); const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= u.length) enter(u[n-1].id);
 });
 
-/* ---------- "用上次的模式直接进入" ---------- */
-const lastBtn = document.getElementById('lastBtn');
-if (lastMode && MODES.some(m => m.id === lastMode && m.ready !== false)){
-  lastBtn.style.display = '';
-  lastBtn.addEventListener('click', () => enter(lastMode));
+/* ============================================================================
+   三、启动序列 —— 纯前端装饰，全部为真实静态事实，无假数据
+   ========================================================================== */
+const LINES = [
+  ['inf','LuminaSec bootloader v1.006'],
+  ['dim','local bind 127.0.0.1:8770 · non-loopback refused by default'],
+  ['ok','[ ok ] scope guard          fail-closed (empty = deny)'],
+  ['ok','[ ok ] traffic governor     singleton · 30 req / 600s per root domain'],
+  ['ok','[ ok ] waf state machine    NORMAL→CAUTION→COOLDOWN→BLOCKED (persisted)'],
+  ['ok','[ ok ] cloud egress         redact (cookie/jwt/key masked)'],
+  ['ok','[ ok ] builtin tools        19 mounted · not counted in schema quota'],
+  ['ok','[ ok ] whitebox sinks       72 rules · php/java/python/javascript'],
+  ['ok','[ ok ] risk levels          L0 auto · L1 logged · L2/L3 confirm'],
+  ['dim','select operation mode to continue_'],
+];
+const bootEl = document.getElementById('boot'), mainEl = document.getElementById('main');
+let li = 0, ci = 0, curLine = null, done = false, timer = null;
+
+function finish(){
+  if (done) return; done = true;
+  clearTimeout(timer);
+  /* 日志与 A 在**同一个 grid 单元**里，所以：
+     · 日志淡出（.gone）与 A 浮现（.on）同时发生，A 就出现在日志原址
+     · 之后 remove() 日志不会引起任何布局位移 —— 这就是"平齐" */
+  bootEl.innerHTML = LINES.map(([,t]) => `<div>${t}</div>`).join('')
+                   + '<div><span class="cursor"></span></div>';
+  requestAnimationFrame(() => {
+    bootEl.classList.add('gone');
+    mainEl.classList.add('on');
+  });
+  setTimeout(() => {
+    if (bootEl.parentNode) bootEl.remove();
+    const s = document.querySelector('.skip'); if (s) s.remove();
+  }, 380);
+}
+function tick(){
+  if (done) return;
+  if (li >= LINES.length){ finish(); return; }
+  const [cls, text] = LINES[li];
+  if (!curLine){ curLine = document.createElement('div'); curLine.className = cls;
+                 bootEl.appendChild(curLine); ci = 0; }
+  curLine.textContent = text.slice(0, ++ci);
+  if (ci >= text.length){ curLine = null; li++; timer = setTimeout(tick, 90); }
+  else timer = setTimeout(tick, text[ci-1] === ' ' ? 8 : 14);
+}
+/* reduced-motion 直接跳到终态；否则任意键可跳过 */
+if (REDUCED) finish();
+else {
+  addEventListener('keydown', finish, { once:true });
+  const sk = document.querySelector('.skip'); if (sk) sk.addEventListener('click', finish);
+  setTimeout(tick, 260);
 }
 
-/* ---------- 快捷键：1 / 2 直接进入前两个可用模式 ---------- */
-document.addEventListener('keydown', e => {
-  const usable = MODES.filter(m => m.ready !== false);
-  const n = parseInt(e.key, 10);
-  if (n >= 1 && n <= usable.length) enter(usable[n-1].id);
-});
+/* 时钟（纯装饰） */
+setInterval(() => {
+  const d = new Date();
+  document.getElementById('clock').textContent =
+    [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2,'0')).join(':');
+}, 1000);
 </script>
 </body>
 </html>

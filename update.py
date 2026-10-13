@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SRC Agent 更新工具（update.exe 源码）。
+"""LuminaSec 更新工具（update.exe 源码）。
 
 功能：
   1. 版本比对：本地 VERSION.txt vs 远端 main 的 VERSION.txt
@@ -616,7 +616,7 @@ class App:
         from tkinter import ttk
         self.tk, self.ttk = tk, ttk
         self.root = tk.Tk()
-        self.root.title("SRC Agent 更新工具")
+        self.root.title("LuminaSec 更新工具")
         self.root.geometry("720x520")
         self.root.minsize(640, 460)
         self.proxy = tk.StringVar(value=self._load_proxy())
@@ -650,7 +650,7 @@ class App:
 
         head = ttk.Frame(f)
         head.pack(fill="x")
-        ttk.Label(head, text="SRC Agent 更新工具", font=("Microsoft YaHei", 15, "bold")).pack(side="left")
+        ttk.Label(head, text="LuminaSec 更新工具", font=("Microsoft YaHei", 15, "bold")).pack(side="left")
         ttk.Label(head, text=f"  目录：{ROOT}", foreground="#888").pack(side="left", padx=8)
 
         ver = ttk.LabelFrame(f, text=" 版本 ", padding=10)

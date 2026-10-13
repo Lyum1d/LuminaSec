@@ -26,7 +26,7 @@ from .executor import executor
 from .llm import current_backend_name, get_backend, set_backend
 from .registry import registry
 
-app = FastAPI(title="SRC 渗透 Agent", version="0.1.0")
+app = FastAPI(title="LuminaSec", version="0.1.0")
 
 
 @app.on_event("startup")
@@ -148,7 +148,13 @@ async def remote_access_token_guard(request, call_next):
     # 于是控制台改完 CSS 后**用户浏览器一直用缓存里的旧样式**：
     # 现象是「按你说的修了，但我这边还是坏的」—— 与上面那次事故同一个坑。
     # 新增静态目录时必须同步加进这个判断（两份清单只留一处，别再各写一套）。
-    if request.url.path.startswith(("/static", "/console-assets")):
+    # ⚠️ v114：三个 **HTML 入口**（`/`、`/app`、`/console`）也必须覆盖。
+    # 它们是 `FileResponse` 直出、默认**不带任何缓存头**，而 HTML 外壳里含着
+    # 品牌名与资源引用 —— 缓存住就是「代码已改、用户界面不变」。实测踩到：
+    # LuminaSec 改名后工程库与发布库的代码都确认干净，用户浏览器左上角仍是
+    # 「SRC Agent」，根因即 index.html 被缓存。
+    if (request.url.path in ("/", "/app", "/console")
+            or request.url.path.startswith(("/static", "/console-assets"))):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
