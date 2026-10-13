@@ -1041,9 +1041,16 @@ class Agent:
                 session.target = proj_target
         # 立即落库，避免中途关闭页面导致整轮记录丢失（树字段一并带上，
         # 分支线索在首次运行后就出现在小地图上）
+        # ⚠️ v115 修：**必须带 `mode`**。此前这里传了 parent_id/title/subtask/constraints
+        # 却漏了 mode —— 而这是**首次**落库（`sessions.create` 只建内存对象），
+        # 所以 INSERT 分支永远写默认值 ⇒ **白盒会话在库里被存成 blackbox**。
+        # 后果是双重的：① 重启后 `adopt()` 读回 blackbox，白盒会话拿到黑盒的 197 个工具
+        # 与黑盒提示词；② 控制台「项目/会话」列表按 mode 过滤时看不到它。
+        # 全程不报错 —— 与 `constraints`/`subtask` 是同一类「闸门依据没落库」的静默失效。
         store.save_session(session.id, session.project, user_message, session.target,
                            "running", parent_id=session.parent_id, title=session.title,
-                           subtask=session.subtask, constraints=session.constraints)
+                           subtask=session.subtask, constraints=session.constraints,
+                           mode=session.mode)
         await session.emit({"type": "session_start", "session_id": session.id})
         backend = get_backend(self.backend_name)
         # 漏洞验证类任务自动路由云端：本地小模型在多步推理上明显吃力，
@@ -1550,6 +1557,20 @@ class Agent:
                         # 执行体在 app/codebase/tools.py（**内部已把一切异常转成文字回执**，
                         # 不会打断这里的循环）。
                         note = codebase_tools.handle(tool.alias, target, args)
+                        # ⚠️ v115 修：**必须自己回灌 role=tool 消息**。
+                        # 其余 5 个内置 handler（_note_fact / _search_history /
+                        # _propose_branch / _split_task / _kb_fofa_tool）都在**各自函数里**
+                        # append 过了，只有 `code_*` 走的是无状态的
+                        # `codebase_tools.handle()`（它拿不到 session，也没法自己补）
+                        # ⇒ 回来之后没人补这一条。
+                        # 后果：messages 里 assistant 声明了 tool_calls、却没有对应的
+                        # role=tool 回复，**OpenAI 兼容端点直接 400**
+                        # （tool_call_id ... has no response）——
+                        # 表现为白盒会话**第二轮必挂**，而第一轮看起来完全正常。
+                        # 放在这里而不是 `_record_builtin_step` 里：那个函数是四条分支
+                        # **共用**的，加在那儿会让另外 5 个变成双重回灌。
+                        session.messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                                 "content": note})
                     else:  # kb_search / kb_read / fofa_search
                         note = await self._kb_fofa_tool(session, tool.alias, tc, args)
                     session.builtin_calls.append(tool.alias)

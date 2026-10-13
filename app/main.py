@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import AsyncIterator
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config, providers, report, scope, store, usage
-from . import graph, ratelimit, secretbox, traffic
+from . import graph, secretbox, traffic
 from . import difftest, flowtest
 from . import mcp_client
 from .importers import common as importers_common
@@ -148,11 +149,13 @@ async def remote_access_token_guard(request, call_next):
     # 于是控制台改完 CSS 后**用户浏览器一直用缓存里的旧样式**：
     # 现象是「按你说的修了，但我这边还是坏的」—— 与上面那次事故同一个坑。
     # 新增静态目录时必须同步加进这个判断（两份清单只留一处，别再各写一套）。
+    #
     # ⚠️ v114：三个 **HTML 入口**（`/`、`/app`、`/console`）也必须覆盖。
     # 它们是 `FileResponse` 直出、默认**不带任何缓存头**，而 HTML 外壳里含着
     # 品牌名与资源引用 —— 缓存住就是「代码已改、用户界面不变」。实测踩到：
     # LuminaSec 改名后工程库与发布库的代码都确认干净，用户浏览器左上角仍是
-    # 「SRC Agent」，根因即 index.html 被缓存。
+    # 「SRC Agent」，根因即 index.html 被缓存。与 v050.2 同一个坑第三次出现，
+    # 所以这里把「入口 HTML」与「静态资源」合成一个判断，别再漏第三类。
     if (request.url.path in ("/", "/app", "/console")
             or request.url.path.startswith(("/static", "/console-assets"))):
         response.headers["Cache-Control"] = "no-cache"
@@ -1169,7 +1172,11 @@ async def _run_agent(session, message: str, project_id: str):
                 agent.persist_interrupted(session, reason="模型调用失败或任务异常结束")
         except Exception:
             logger.exception("记忆沉淀失败（不影响步骤落库）")
-        store.save_session(session.id, project_id, message, session.target, session.state)
+        # v115 修：这里同样**必须带 `mode`**（此前漏了）。它虽不是首次落库，
+        # 但 `save_session` 的约定是"mode 只在显式传入时更新" —— 不传就永远保持库里的值，
+        # 于是白盒会话在库里一直是 blackbox。见 agent.py 同一处的说明。
+        store.save_session(session.id, project_id, message, session.target, session.state,
+                           mode=session.mode)
         for st in session.steps:
             store.save_step(session.id, agent._step_dict(st))
 

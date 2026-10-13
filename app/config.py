@@ -272,7 +272,6 @@ VULN_KEYWORDS = (
 )
 
 # ---------- HTTP 重放器 ----------
-REPLAY_MIN_INTERVAL = float(os.getenv("REPLAY_MIN_INTERVAL", "0.6"))  # 全局请求最小间隔（秒）
 REPLAY_MAX_BODY = 4000     # 回传给模型的最大响应体长度（字符）
 SCOPE_FILE = DATA_DIR / "scope.json"  # 授权域名白名单
 
@@ -298,9 +297,12 @@ CONSOLE_CONFIRM_TTL = int(os.getenv("AGENT_CONSOLE_CONFIRM_TTL", "300"))
 #   宁可让工具跑不起来，也不能静默放行未授权目标。
 ENFORCE_SCOPE = os.getenv("ENFORCE_SCOPE", "1") == "1"
 
-# ---- 出网限速（实现见 app/ratelimit.py）----
-TOOL_MIN_INTERVAL = float(os.getenv("TOOL_MIN_INTERVAL", "1.0"))
-GLOBAL_MIN_INTERVAL = float(os.getenv("GLOBAL_MIN_INTERVAL", "0.2"))
+# ---- 出网节流已统一到 app/traffic.py（v023.1），见下面的「统一流量调度」----
+# ⚠️ v115 删掉了 TOOL_MIN_INTERVAL / GLOBAL_MIN_INTERVAL / REPLAY_MIN_INTERVAL 三个常量：
+# 读它们的旧调用方在 v023.1 统一到 `traffic.governor` 时就没了，模块 `app/ratelimit.py`
+# 也随之删除（它对调用方的唯一价值是"兼容旧签名"，而兼容对象已不存在）。
+# 若你的 config.yaml 里还留着这三个键，**会被忽略**，不再有任何效果 ——
+# 要调出网节奏请用「流量治理」组的参数（TRAFFIC_*）。
 
 # ---- 统一流量调度（v023.1，实现见 app/traffic.py）----
 # 滑动窗口请求预算：同一 root_domain 在窗口内最多发这么多请求，超出即暂停

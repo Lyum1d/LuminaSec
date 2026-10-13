@@ -35,7 +35,7 @@ from __future__ import annotations
 from . import config
 
 # 分组顺序即前端展示顺序
-GROUP_ORDER = ["编排节奏", "超时与预算", "上下文与输出", "出网限速", "流量治理", "安全闸门", "稳定性"]
+GROUP_ORDER = ["编排节奏", "超时与预算", "上下文与输出", "流量治理", "安全闸门", "稳定性"]
 
 # ⚠️ 只列白名单内的参数。**新增项前先问：运行时改它真的有意义吗？改错了看得出来吗？**
 SPECS: list[dict] = [
@@ -98,14 +98,14 @@ SPECS: list[dict] = [
     {"key": "HISTORY_EXCERPT_CHARS", "group": "上下文与输出", "label": "历史摘要截断字符",
      "type": "int", "min": 20, "max": 2000, "hot": True},
 
-    # ---------------- 出网限速 ----------------
-    {"key": "GLOBAL_MIN_INTERVAL", "group": "出网限速", "label": "全局最小请求间隔(秒)",
-     "type": "float", "min": 0.0, "max": 60.0, "step": 0.1, "hot": True,
-     "note": "所有出网请求之间的最小间隔。**调小会让目标压力变大**。"},
-    {"key": "TOOL_MIN_INTERVAL", "group": "出网限速", "label": "单工具最小间隔(秒)",
-     "type": "float", "min": 0.0, "max": 60.0, "step": 0.1, "hot": True},
-    {"key": "REPLAY_MIN_INTERVAL", "group": "出网限速", "label": "重放器最小间隔(秒)",
-     "type": "float", "min": 0.0, "max": 60.0, "step": 0.1, "hot": True},
+    # ⚠️ v115：删掉了整个「出网限速」组（GLOBAL_MIN_INTERVAL / TOOL_MIN_INTERVAL /
+    # REPLAY_MIN_INTERVAL 三项）。它们**一个消费者都没有** —— 读它们的旧调用方在
+    # v023.1 统一到 `traffic.governor` 时就被删了，只剩这三个参数还在控制台里
+    # 显示成"可调、已保存"，而改它对运行时**毫无影响**。
+    # 这一组里 `GLOBAL_MIN_INTERVAL` 的 note 还写着「调小会让目标压力变大」——
+    # 给用户一个**看起来在管出网压力、其实什么都不做**的旋钮，比没有这个旋钮更坏。
+    # 真正的出网节流全在 `traffic.governor`（滑动窗口预算 + 并发限制 + 根域名暂停），
+    # 对应参数在下面的「流量治理」组。
 
     # ---------------- 流量治理 ----------------
     {"key": "TRAFFIC_WINDOW_SECONDS", "group": "流量治理", "label": "治理窗口(秒)",

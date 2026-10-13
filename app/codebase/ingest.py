@@ -58,7 +58,12 @@ LANG_BY_EXT = {
 }
 
 #: 首批支持分析的语言（用户决策②：PHP → Java → Python → JS）
-SUPPORTED_LANGS = ("php", "java", "python", "javascript")
+#: 首批支持分析的语言。
+#: ⚠️ v115 补上 `typescript`：`index.py` 里 `typescript` 的**符号模式 / import 正则 /
+#: 注释符三张表本来就写好了**，只有这个元组漏了它 ⇒ `.ts`/`.tsx` 被 `scan_tree`
+#: 算进 `by_lang`（入库报告说"发现 N 个 ts 文件"），却**在索引与检索里一个都没有**
+#: —— 报告与磁盘不一致，而且用户完全看不出来是"不支持"还是"没命中"。
+SUPPORTED_LANGS = ("php", "java", "python", "javascript", "typescript")
 
 #: 构建/依赖清单文件 → 它所代表的语言
 BUILD_FILES = {
@@ -80,6 +85,37 @@ SKIP_DIRS = {
     ".venv", "venv", "env", ".idea", ".vscode", ".mypy_cache", ".pytest_cache",
     "coverage", ".next", ".nuxt", "site-packages",
 }
+
+# ---------------------------------------------------------------- 敏感文件红线（v115）
+# ⚠️ 与 `SKIP_DIRS` **性质不同**：那个是"通用噪音，跳过了不影响结论"，
+# 这个是**凭据/私钥红线** —— 一旦被复制进受控根（`data/codebases/<id>/`），
+# 模型就能用 `code_read` 把它读出来并回喂给云端模型；而"用户明确点过入库"
+# 会给人一种"这些东西已经被允许了"的错觉。
+#
+# 所以判定放在 `walk_source`（**扫描/索引/检索/复制四层共用的那一个入口**）：
+# 只在复制处挡是不够的 —— 那样扫描报告仍会把它们算进文件数与语言分布，
+# 又是"报告与磁盘不一致"那一类（v076 已经踩过一次反面）。
+#
+# ⚠️ 但**不静默跳过**：`IngestResult.summary()` 会明确打印跳过了几个、都是谁。
+# 悄悄少读几个文件，用户会以为仓库里本来就没有。
+SENSITIVE_NAMES = {
+    ".env", ".env.local", ".env.production", ".env.development", ".env.staging",
+    ".env.test", ".env.live", ".env.prod", ".env.dev",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    ".npmrc", ".pypirc", ".netrc", "_netrc", ".htpasswd",
+    ".git-credentials", "credentials", "credentials.json",
+    "secrets.json", "secrets.yaml", "secrets.yml", "secret.json",
+    ".dockercfg", ".pgpass", ".my.cnf", "kubeconfig",
+}
+#: 敏感**后缀**（凭据容器 / 私钥 / 密钥库）
+SENSITIVE_SUFFIX = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk",
+                    ".pkcs12", ".asc", ".gpg", ".kdbx")
+#: 敏感**目录名**（家目录级凭据目录）
+SENSITIVE_DIRS = {".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".config/gcloud"}
+#: 这些后缀是**模板**不是密钥（`.env.example` / `secrets.yaml.template`）——
+#: 本工程自己也发 `config.yaml.example` / `local_tools.json.example`，
+#: 一刀切会把用户真正需要的模板也挡掉。
+SENSITIVE_TEMPLATE_SUFFIX = (".example", ".sample", ".template", ".dist", ".tpl")
 
 #: 「只有字节码/反编译产物」的特征（→ 灰盒）
 BINARY_ARTIFACT_EXT = {".class", ".jar", ".war", ".ear", ".dll", ".so", ".dylib",
@@ -113,6 +149,7 @@ class Scan:
     binary_only_hint: int = 0          # 只有二进制产物、没有对应源码的计数
     truncated: bool = False            # 是否因 MAX_FILES 提前停止
     excluded_dirs: Counter = field(default_factory=Counter)   # 调用方**显式** exclude 掉的目录
+    skipped_sensitive: Counter = field(default_factory=Counter)  # v115 红线跳过的凭据/私钥文件
 
 
 @dataclass
@@ -132,6 +169,8 @@ class IngestResult:
     dry_run: bool = False
     warnings: list[str] = field(default_factory=list)
     excluded_dirs: dict[str, int] = field(default_factory=dict)   # 调用方显式 exclude 掉的目录
+    #: v115 红线：凭据/私钥类文件被跳过的清单（**必须显式告知，不能静默**）
+    skipped_sensitive: dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
         langs = "、".join(f"{k}×{v}" for k, v in
@@ -154,6 +193,19 @@ class IngestResult:
                 f"{k}×{v}" for k, v in sorted(self.excluded_dirs.items())))
             lines.append("              ↑ **这是调用方显式指定的**（不是自动判断）——"
                          "结论只在这份范围内成立，报告里要一起写出来。")
+        if self.skipped_sensitive:
+            # ⚠️ **必须显式告知**（v115）。悄悄少读几个文件，用户会以为"仓库里本来就没有"；
+            # 而这几个文件恰恰是他最可能想确认"到底进没进库"的。
+            names = sorted(self.skipped_sensitive)
+            show = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
+            lines.append(f"🚫 敏感文件  : {len(names)} 个**未入库**（{show}）")
+            lines.append("              ↑ 凭据 / 私钥类（`.env` / `id_rsa` / `*.pem` / `*.key`"
+                         " / `.npmrc` / `.ssh/` 等）**既不复制进受控根、也不进索引** ——"
+                         "这是红线，不是可选项。")
+            lines.append("              · 若它们确实是审计对象，请在**受控环境**内单独取样，"
+                         "不要靠入库把它们带进受控根。")
+            lines.append("              · `.env.example` / `secrets.yaml.template` 这类**模板**"
+                         "不受影响（模板后缀已放行）。")
         if self.oversized:
             lines.append(f"超大文件    : {len(self.oversized)} 个不进索引（不影响语言统计）")
         if self.truncated:
@@ -165,7 +217,7 @@ class IngestResult:
 
 # ---------------------------------------------------------------- 扫描
 
-def walk_source(root, *, exclude=(), skipped=None, excluded=None):
+def walk_source(root, *, exclude=(), skipped=None, excluded=None, sensitive=None):
     """遍历受控根，产出 `(rel_dir, filename, abs_path)`。**唯一的目录遍历入口。**
 
     ## 为什么必须收口成一个函数（v076 实测教训）
@@ -188,6 +240,8 @@ def walk_source(root, *, exclude=(), skipped=None, excluded=None):
         skipped = Counter()
     if excluded is None:
         excluded = Counter()
+    if sensitive is None:
+        sensitive = Counter()
 
     for dirpath, dirnames, filenames in os.walk(root_p):
         rel_dir = pathlib.Path(dirpath).relative_to(root_p).as_posix()
@@ -197,12 +251,18 @@ def walk_source(root, *, exclude=(), skipped=None, excluded=None):
         for d in dirnames:
             if d in SKIP_DIRS:
                 skipped[d] += 1
+            elif d.lower() in SENSITIVE_DIRS:
+                # 凭据目录（`.ssh` / `.aws` / `.gnupg` …）—— 红线，优先于用户 exclude 判定
+                sensitive[(f"{rel_dir}/{d}" if rel_dir else d)] += 1
             elif _is_excluded(rel_dir, d, excl):
                 excluded[(f"{rel_dir}/{d}" if rel_dir else d)] += 1
             else:
                 keep.append(d)
         dirnames[:] = keep
         for fn in sorted(filenames):        # 排序：让三层的结果都可复现
+            if _is_sensitive(fn):           # 凭据/私钥红线（v115）—— 优先于用户 exclude
+                sensitive[(f"{rel_dir}/{fn}" if rel_dir else fn)] += 1
+                continue
             if _file_matches(rel_dir, fn, excl):    # 文件级排除（`test_*.py` 这类）
                 excluded[(f"{rel_dir}/{fn}" if rel_dir else fn)] += 1
                 continue
@@ -226,6 +286,29 @@ def _norm_exclude(exclude) -> tuple[str, ...]:
 def _has_glob(s: str) -> bool:
     """含通配符 → 这条 `exclude` 是**文件模式**（`test_*.py` / `*.min.js` / `src/gen/*.java`）。"""
     return any(ch in s for ch in "*?[")
+
+
+def _is_sensitive(fn: str) -> bool:
+    """文件名是否属**凭据/私钥类敏感文件**（v115 红线：不复制、不进索引）。
+
+    判定规则（都在 `SENSITIVE_*` 常量里，改口径只改那一处）：
+      · 精确名（大小写不敏感）：`.env` / `id_rsa` / `.npmrc` / `secrets.json` …
+      · 后缀：`.pem` / `.key` / `.p12` / `.jks` / `.ppk` …
+      · **例外**：模板后缀优先放行 —— `.env.example` / `secrets.yaml.template`
+        / `app.key.dist` 都不是密钥，而用户往往正需要它们（本工程自己也发
+        `config.yaml.example`）。不排除会把该留的挡掉。
+
+    ⚠️ 只按**文件名**判、不看内容：看内容要么慢（要读全库）、要么靠正则猜
+    （SRC 报告里到处都是 `KEY=value` 的示例，误报率压不住）。
+    """
+    low = (fn or "").strip().lower()
+    if not low:
+        return False
+    if low.endswith(SENSITIVE_TEMPLATE_SUFFIX):
+        return False                       # 模板放行（有意的例外，见上）
+    if low in SENSITIVE_NAMES:
+        return True
+    return low.endswith(SENSITIVE_SUFFIX)
 
 
 def _file_matches(rel_dir: str, fn: str, exclude: tuple[str, ...]) -> bool:
@@ -299,7 +382,8 @@ def scan_tree(root, *, max_files: int = MAX_FILES, exclude=()) -> Scan:
     s = Scan(root=root_p)
     for _rel_dir, fn, p in walk_source(root_p, exclude=exclude,
                                        skipped=s.skipped_dirs,
-                                       excluded=s.excluded_dirs):
+                                       excluded=s.excluded_dirs,
+                                       sensitive=s.skipped_sensitive):
         rel = p.relative_to(root_p).as_posix()
         if len(s.files) >= max_files:
             s.truncated = True
@@ -380,25 +464,31 @@ def make_codebase_id(source, extra: str = "") -> str:
     return f"{slug}-{h}"
 
 
-def _copy_tree(src: pathlib.Path, dst: pathlib.Path, skip: set[str],
+def _copy_tree(src: pathlib.Path, dst: pathlib.Path,
                exclude: tuple[str, ...] = ()) -> int:
-    """把源码复制进受控根（跳过依赖/产物目录，以及调用方显式排除的目录）。"""
+    """把源码复制进受控根（跳过通用噪音目录，以及调用方显式排除的目录**与文件**）。
+
+    ⚠️ v115 修：**改走 `walk_source`**（此前这里自己写了一份 `os.walk`）。
+
+    原先那份只过滤目录（`_is_excluded`），**连 `_file_matches` 都没调** ⇒
+    ① `exclude` 里写单个文件或通配符（`test_*.py`）时，**扫描 / 索引 / 检索都排除了它，
+      而复制这一步照样把它搬进受控根** —— 于是 `code_read` 仍然能读到"已排除"的文件。
+       这与 v076 那次「报告说已排除、索引里其实还在」是同一个病的另一面：
+       **报告说已排除，磁盘上其实还在**。
+    ② 又多出第 4 份"走哪些文件"的实现 —— 正是 `walk_source` 的 docstring 要消灭的东西。
+
+    `skip` 参数**已删除**：调用方传的就是 `SKIP_DIRS`，而 `walk_source` 内部已经处理它，
+    留着就是两处各写一遍同一个判断（那正是要避免的）。
+    """
     n = 0
-    for dirpath, dirnames, filenames in os.walk(src):
-        rel_dir = pathlib.Path(dirpath).relative_to(src).as_posix()
-        if rel_dir == ".":
-            rel_dir = ""
-        dirnames[:] = [d for d in dirnames
-                       if d not in skip and not _is_excluded(rel_dir, d, exclude)]
-        rel = pathlib.Path(dirpath).relative_to(src)
-        (dst / rel).mkdir(parents=True, exist_ok=True)
-        for fn in filenames:
-            sp = pathlib.Path(dirpath) / fn
-            try:
-                shutil.copy2(sp, dst / rel / fn)
-                n += 1
-            except OSError:
-                continue
+    for rel_dir, fn, sp in walk_source(src, exclude=exclude):
+        dst_dir = dst / rel_dir if rel_dir else dst
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(sp, dst_dir / fn)
+            n += 1
+        except OSError:
+            continue
     return n
 
 
@@ -459,7 +549,8 @@ def ingest(source, *, codebase_id: str | None = None, source_kind: str = "openso
         skipped_dirs=dict(scan.skipped_dirs), oversized=scan.oversized[:20],
         supported=supported, truncated=scan.truncated,
         dry_run=dry_run, warnings=warnings,
-        excluded_dirs=dict(scan.excluded_dirs))
+        excluded_dirs=dict(scan.excluded_dirs),
+        skipped_sensitive=dict(scan.skipped_sensitive))
 
     if dry_run:
         return res
@@ -471,7 +562,7 @@ def ingest(source, *, codebase_id: str | None = None, source_kind: str = "openso
             # 同一 id 重复入库：先清掉旧的，避免新旧文件混在一起（那会让索引结果无法解释）
             shutil.rmtree(dst, ignore_errors=True)
         dst.mkdir(parents=True, exist_ok=True)
-        copied = _copy_tree(src, dst, SKIP_DIRS, _norm_exclude(exclude))
+        copied = _copy_tree(src, dst, _norm_exclude(exclude))
         if copied == 0:
             raise IngestError(f"复制失败：{src} → {dst}（0 个文件）")
         root = dst.resolve()

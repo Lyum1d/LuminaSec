@@ -262,13 +262,19 @@ def _finding_detail(i: int, f: dict) -> list[str]:
 
 
 def _steps_of(session_id: str) -> list[dict]:
+    # ⚠️ v115 修：连接必须 `try/finally` 关闭。
+    # 原先 `execute()` 一旦抛异常就直接跳过 `conn.close()` —— 连接连同文件句柄一起泄漏
+    # （Windows 上还会锁住 projects.db，让后续的备份/替换失败）。
+    # 报告生成是"点一下就生成"的路径，连点几次就会积累。
     import sqlite3
     conn = sqlite3.connect(store.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT * FROM steps WHERE session_id=? ORDER BY created_at", (session_id,)
-    ).fetchall()
-    conn.close()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM steps WHERE session_id=? ORDER BY created_at", (session_id,)
+        ).fetchall()
+    finally:
+        conn.close()
     return [dict(r) for r in rows]
 
 

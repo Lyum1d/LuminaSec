@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import AsyncIterator
 
-from . import config, ratelimit, traffic
+from . import config, traffic
 from .registry import Tool
 from .scope import check_scope, first_unauthorized_host_in_argv
 from .scope import first_unauthorized_target_list_in_argv
@@ -71,22 +71,39 @@ def _check_target_type(target_type: str, target: str) -> str | None:
 
 
 def _kill_tree(proc) -> None:
-    """终止工具进程树（v012 后半，取消硬终止用）。
+    """终止工具进程树（取消硬终止 / 总超时 / 空闲超时 / 异常兜底**四处共用**）。
 
-    proc.kill 只杀直接子进程；工具箱脚本（python/bat）常会再起子进程，
-    taskkill /T /F 才能把整棵树带走。兜底失败时至少直接子进程已被 kill。
+    ⚠️⚠️ v115 修：**顺序曾经是反的，等于根本没杀到树**。
+
+    原先是「先 `proc.kill()`，再 `taskkill /T /F /PID`」。而 `taskkill /T` 要靠
+    **父进程还活着**才能枚举它的子孙 —— 父进程一旦被杀，那条父子链就断了，
+    taskkill 只能报「找不到进程」⇒ **孙进程照旧活着**（继续占着目标连接、
+    继续往目标发请求，而界面上已经显示"已终止"）。
+
+    实测（2026-10-13，本机真起「父 → 孙」两层进程 + 心跳文件判定存活）：
+      · 先 kill 再 `taskkill /T` → 孙进程**存活**  ← 旧实现的顺序
+      · 先 `taskkill /T` 再 kill → 孙进程**死亡**
+      · 只 `taskkill /T /F`      → 孙进程**死亡**
+
+    所以现在是「**先 taskkill 整棵树**（`/F` 本就带强制终止，父与孙一起带走），
+    taskkill 不可用/失败时才兜底 `proc.kill()`」。
+    这个顺序错误自 v012 就在，**四个调用点全都受影响** —— 不只是超时路径。
     """
-    try:
-        proc.kill()
-    except Exception:
-        pass
+    killed_tree = False
     try:
         import subprocess as _sp
-        _sp.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                capture_output=True, timeout=10,
-                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
-    except Exception:
-        pass
+        r = _sp.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=10,
+                    creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+        killed_tree = (r.returncode == 0)
+    except Exception:                                   # noqa: BLE001
+        killed_tree = False
+    if not killed_tree:
+        # 兜底（非 Windows / 权限不足 / 进程已退出）：至少保证直接子进程被终止。
+        try:
+            proc.kill()
+        except Exception:                               # noqa: BLE001
+            pass
 
 
 # ---------- 授权范围（白名单）校验 ----------
@@ -120,6 +137,14 @@ def load_templates() -> dict[str, dict]:
     if not p.exists():
         return {}
     data = json.loads(p.read_text(encoding="utf-8"))
+    # v117：别名迁移。这份文件与 `tool_overrides.json` 一样是**按别名索引**的，
+    # 所以别名一改它也会失联（模板静默丢掉 → 该工具退回默认拼接，行为可预期但**不是
+    # 用户配的那条**）。走同一个迁移函数，保证两份配置不会只迁一半。
+    # ⚠️ 局部 import：`registry` 在模块层会 import 本模块用到的东西，顶层写会成环。
+    from . import registry as _reg                                # noqa: PLC0415
+    data, _n = _reg.migrate_alias_keys(data, path=p)
+    if _n:
+        print(f"[executor] 别名迁移（v117）：{_n} 条模板键已从旧别名改写为新别名。")
     out: dict[str, dict] = {}
     for k, v in data.items():
         if k.startswith("_"):
@@ -682,7 +707,7 @@ class LocalExecutor(Executor):
                     break
                 remaining = deadline - time.time()
                 if remaining <= 0:
-                    proc.kill()
+                    _kill_tree(proc)
                     yield {"type": "error",
                            "data": f"工具执行超过总时长上限（{total}s），已终止"}
                     break
@@ -694,7 +719,7 @@ class LocalExecutor(Executor):
                         timeout=min(remaining, config.TOOL_IDLE_TIMEOUT),
                     )
                 except asyncio.TimeoutError:
-                    proc.kill()
+                    _kill_tree(proc)
                     yield {"type": "error",
                            "data": f"工具超过 {config.TOOL_IDLE_TIMEOUT}s 无输出，已终止"}
                     break
@@ -725,7 +750,7 @@ class LocalExecutor(Executor):
             try:
                 await asyncio.wait_for(proc.wait(), timeout=10)
             except asyncio.TimeoutError:
-                proc.kill()
+                _kill_tree(proc)
                 await proc.wait()
             if truncated:
                 yield {"type": "output",
@@ -734,7 +759,7 @@ class LocalExecutor(Executor):
         except Exception as e:
             yield {"type": "error", "data": f"执行异常：{e}"}
             try:
-                proc.kill()
+                _kill_tree(proc)
             except Exception:
                 pass
 

@@ -4,7 +4,7 @@
 红线（v017 计划 5.3/5.5/第 2 节）：
 - 只允许 GET/HEAD/OPTIONS——写方法在本模块**根本没有入口**（不是校验拦截，
   是不接受）；
-- 每次请求都过 scope.check_scope + ratelimit 限速；
+- 每次请求都过 scope.check_scope + traffic.governor 限速；
 - 判定保守：只把「变体返回了可证明的对象数据且可复现」标为疑似，
   状态码差异/公开数据/不稳定响应都不产生候选；
 - 差分结论是**候选建议**（draft），确认必须走人工复核（v012 状态模型）。
@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, parse_qsl, urlencode
 
 import httpx
 
-from . import config, ratelimit, scope, traffic
+from . import config, scope, traffic
 
 READONLY_METHODS = ("GET", "HEAD", "OPTIONS")
 

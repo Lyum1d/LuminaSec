@@ -660,12 +660,11 @@ def parse_tool_arguments(raw: str) -> dict:
         return {"target": raw.strip(), "args": ""}
 
 
-# ---------- 旧接口兼容（DeepSeekBackend / load_anthropic_cfg 等历史引用） ----------
-def load_anthropic_cfg() -> dict:
-    """旧版 Anthropic 配置读取，保留给兼容路径；新代码请直接用 providers。"""
-    p = providers.get("anthropic") or {}
-    return {"base_url": p.get("base_url", ""), "api_key": p.get("api_key", ""),
-            "model": p.get("model", config.DEFAULT_ANTHROPIC_MODEL)}
+# ---------- 旧接口兼容（DeepSeekBackend 等历史引用） ----------
+# ⚠️ v115 删掉了 `load_anthropic_cfg()`：它在全仓**零调用点**（连测试都没有），
+# 而真正的 Anthropic 读取路径是 `providers.get("anthropic")`（本函数只是它的薄包装）。
+# `DeepSeekBackend` 这个别名保留 —— 它是给外部按旧名字 import 用的，
+# 删掉会让 `from app.llm import DeepSeekBackend` 直接 ImportError。
 
 
 DeepSeekBackend = OpenAICompatBackend  # 旧引用别名：DeepSeek 已是普通 OpenAI 兼容供应商

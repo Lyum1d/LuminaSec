@@ -198,6 +198,105 @@ def _make_alias(name: str, rel_path: str, used: set[str]) -> str:
     return alias
 
 
+# ---------------------------------------------------------------- 别名迁移（v117）
+def _raw_tools_json() -> list[dict]:
+    """读原始 `tools.json`（未装配）。别名模拟与迁移都以它为**唯一输入**。"""
+    p = config.TOOLBOX_ROOT / "config" / "tools.json"
+    if not p.exists():
+        return []
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, list) else []
+    except Exception:                                            # noqa: BLE001
+        return []
+
+
+def _alias_plan(raw: list[dict], *, legacy: bool) -> list[str]:
+    """按 `tools.json` 的顺序算一遍别名序列。
+
+    `legacy=True` → v109–v116 的算法（**双重生成**，别名带无意义后缀）；
+    `legacy=False` → v117 的算法（单次生成）。
+
+    两套算法**写在一起**是刻意的：迁移的正确性依赖于"它们只差那一句"，
+    分开放两处就会各自漂移。
+    """
+    used: set[str] = set()
+    out: list[str] = []
+    for item in raw:
+        name = item.get("name", "")
+        rel = item.get("path", "") or ""
+        ov = ALIAS_OVERRIDES.get(name)
+        if legacy:
+            alias = ov or _make_alias(name, rel, used)
+            if alias in used:                 # ← v117 已删除的那一句（此处仅用于复现旧行为）
+                alias = _make_alias(name, rel, used)
+        else:
+            alias = ov if (ov and ov not in used) else _make_alias(name, rel, used)
+        used.add(alias)
+        out.append(alias)
+    return out
+
+
+_LEGACY_MAP_CACHE: dict[str, str] | None = None
+
+
+def legacy_alias_map() -> dict[str, str]:
+    """`{旧别名: 新别名}` —— v117 去掉"双重生成"后**别名会变**的那批。
+
+    当前本机实测：**147 条会变**（108 个去掉 `_2`，39 个被重新编号，例如 `tool_4 → tool_2`）。
+
+    为什么**运行时算**而不是写死一张表：别名是**由 `tools.json` 推导出来的**，
+    而那份清单在别的机器上是**用户自己的工具箱**。写死只能覆盖本机，换台机器就迁移不到 ——
+    恰好是在别人机器上"覆写静默失效"最危险。这里把两套算法在同一输入上各跑一遍，
+    映射自然产生，与具体清单无关。
+
+    结果**缓存**：`load()` 与 `executor.load_templates()` 都要用，且 tools.json 一个进程只读一次。
+    """
+    global _LEGACY_MAP_CACHE
+    if _LEGACY_MAP_CACHE is None:
+        raw = _raw_tools_json()
+        old = _alias_plan(raw, legacy=True)
+        new = _alias_plan(raw, legacy=False)
+        _LEGACY_MAP_CACHE = {o: n for o, n in zip(old, new) if o != n}
+    return _LEGACY_MAP_CACHE
+
+
+def migrate_alias_keys(data: dict, *, path: "Path | None" = None) -> tuple[dict, int]:
+    """把一份**按别名索引**的配置里的旧别名键改写成新别名。返回 `(新字典, 改了几条)`。
+
+    ⚠️ 三条约定（都是防"静默变松"的）：
+      · **只在目标键未被占用时改写**：若 `xxx` 已被别人用着，保留 `xxx_2` 原样并**记一笔**
+        —— 覆盖会静默丢掉另一条配置，那比不迁移更坏。
+      · `_` 开头的说明键**原样保留**（`tool_overrides.json` 里有 `_说明`）。
+      · 改写了才落盘（`config_io.write_json_atomic` 带备份与审计），没改写不碰文件。
+    """
+    mapping = legacy_alias_map()
+    if not mapping or not isinstance(data, dict):
+        return data, 0
+    out: dict = {}
+    changed = 0
+    conflicts: list[str] = []
+    for k, v in data.items():
+        new_k = mapping.get(k)
+        if new_k and new_k not in data:
+            out[new_k] = v
+            changed += 1
+        else:
+            out[k] = v
+            if new_k and new_k in data:
+                conflicts.append(k)
+    if conflicts:
+        print(f"[registry] ⚠️ 别名迁移有 {len(conflicts)} 条无法改写（目标键已被占用，"
+              f"已保留原名）：{conflicts[:5]}")
+    if changed and path is not None:
+        try:
+            from . import config_io                                 # noqa: PLC0415
+            config_io.write_json_atomic(path, out)
+        except Exception as e:                                      # noqa: BLE001
+            print(f"[registry] ⚠️ 别名迁移写回失败（{path}）：{e} —— 本次仅在内存中生效")
+    return out, changed
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self.tools: list[Tool] = []
@@ -278,9 +377,17 @@ class ToolRegistry:
                 description=(item.get("description") or "").strip(),
                 scriptable=scriptable,
             )
-            # 与 v109 逐字等价（含那句"必然成立"的重复生成）—— 见 _alias_external 的说明。
-            tool.alias = ALIAS_OVERRIDES.get(tool.name) or self._alias_external(tool.name, rel, used)
-            if tool.alias in used:
+            # v117：**单次生成**。此前这里多了一句
+            #     if tool.alias in used: tool.alias = self._alias_external(...)
+            # 而 `_make_alias()` 自己会 `used.add()` ⇒ 那句**必然成立** ⇒ 每个工具被生成
+            # **两遍**、别名永远带一个无意义后缀（`webshell_2` / `burp_2`…）。
+            # 去掉它 = 别名回到干净形态；旧别名的迁移由 `legacy_alias_map()` 负责
+            # （它同时被 `_load_overrides()` 与 `executor.load_templates()` 用）。
+            ov = ALIAS_OVERRIDES.get(tool.name)
+            if ov and ov not in used:
+                tool.alias = ov
+            else:
+                # 覆写值撞车（两个工具配了同一个别名）时退回自动名 —— 保住"别名唯一"。
                 tool.alias = self._alias_external(tool.name, rel, used)
             used.add(tool.alias)
             self._apply_meta(tool, grades, overrides)
@@ -295,24 +402,19 @@ class ToolRegistry:
 
     # ---------- 单个工具的装配（外部清单与自备工具**共用**）----------
     def _alias_external(self, name: str, rel_path: str, used: set[str]) -> str:
-        """外部工具箱清单的 alias —— **与 v109 逐字等价（含那个 `_2` 后缀）**。
+        """外部工具箱清单的 alias —— `_make_alias` **单次调用**。
 
-        ⚠️ 后缀看着像 bug，但**本版刻意冻结**：
+        ⚠️ v117 起：调用点那句"必然成立"的重复生成已删除（见 `load()` 里的说明）。
+        此前它导致 **197 个外部工具里 147 个别名**带无意义后缀
+        （108 个 `_2` + 39 个被顶到 `_4`/`_6`/…/`_80` —— 双重生成让**同基名**工具每次跳 2，
+        于是 40 个中文名工具全落在 `tool` / `tool_2` / … / `tool_80` 家族）。
 
-        `_make_alias()` 自己会把结果登记进 `used`，于是调用点那句
-        `if tool.alias in used:` **必然成立**、于是每个工具都被生成两次 ⇒
-        197 个外部工具里 **147 个带着无意义的 `_2` 后缀**（`burp_2`、`webshell_2`…）。
-        而 `data/tool_overrides.json` 是**按 alias 索引**的 ——
-        一旦这些 alias 变了，那 147 条覆写（allowed_flags / disallowed_flags /
-        target_type / caps / network_control …）会**静默失效、闸门悄悄变松、不报任何错**。
+        ⚠️ 本方法**只做一次 `_make_alias`**，别把重复生成搬进来 ——
+        那会变成四重生成、后缀从 `_2` 变 `_4`（已实测踩过一次）。
 
-        所以清理它必须单独做一次**带 alias 迁移**的版本（把旧键改写成新键并自检），
-        不能顺手改。这个方法存在的意义就是让"冻结"这件事在代码里看得见 ——
-        否则下一个人会把它当笔误直接"修好"。
-
-        ⚠️ 本方法**只做一次 `_make_alias`**。那第二遍是在**调用点**发生的
-        （`if tool.alias in used:` 那一行），两处合起来才是 v109 的行为。
-        把第二遍也搬进来会变成四重生成、后缀从 `_2` 变 `_4` —— 已实测踩到一次。
+        ⚠️ **改这里的生成算法 = 改所有外部工具的别名**，而别名是三份配置的键
+        （`tool_overrides.json` / `invocation_templates.json` 按 alias，`risk_grades.json` 按
+        tool name）。所以任何算法改动都必须配一次键迁移 —— 见 `legacy_alias_map()`。
         """
         return _make_alias(name, rel_path, used)
 
@@ -476,13 +578,19 @@ class ToolRegistry:
         from . import local_tools
 
         used = {t.alias for t in self.tools}
-        taken = set(used)                     # 只读副本，用来算"这个 alias 会不会被改名"
+        # ⚠️ v115 修：`taken` 那份"只读副本"会让**预览与实际注册不一致**。
+        # 下面原先传的是 `set(taken)` —— 每轮都拿同一份**原始集合**的新副本，
+        # 从不累积 ⇒ 同一个目录里 `a.exe` 与 `a.py`（stem 都是 a）在预览里**都叫 `a`**，
+        # 而真正注册时第二个会变成 `a_2`。用户看到"预览写 a、存完变 a_2"，
+        # 只会以为是保存出错（这正是本函数 docstring 要避免的那件事）。
+        # ⇒ 与 `_add_local_tools()` 用**同一个累积集**、同一顺序（`scan["tools"]` 已按
+        #   rel_path 排序），两边的分配结果就必然一致。
         norm = local_tools.normalize_root(root)
         scan = local_tools.scan_root(norm)
         if scan["exists"]:
             ovs = norm["overrides"]
             for spec in scan["tools"]:
-                plain = self._alias_local(spec["name"], spec["rel_path"], set(taken))
+                plain = self._alias_local(spec["name"], spec["rel_path"], used)
                 pin = str((ovs.get(spec["rel_path"]) or {}).get("alias") or "").strip()
                 if pin and pin not in used:
                     alias = pin
@@ -713,7 +821,7 @@ class ToolRegistry:
                 "name": "知识库检索",
                 "alias": "kb_search",
                 "description": "在 SRC 漏洞挖掘知识库（按漏洞类型的测试指南：越权/注入/SSRF/XSS/上传/"
-                               "逻辑/反序列化/JS 逆向/WAF 绕过等 49 篇）与挖掘工作流规则中按关键词检索。"
+                               "逻辑/反序列化/JS 逆向/WAF 绕过等）与挖掘工作流规则中按关键词检索。"
                                "进站前用它找「当前目标特征对应哪篇打法」。",
                 "risk_level": "L0",
                 "risk_reason": "纯本地文件检索，无网络行为",
@@ -852,6 +960,12 @@ class ToolRegistry:
         if not p.exists():
             return {}
         data = json.loads(p.read_text(encoding="utf-8"))
+        # v117：别名迁移。**没改名就不落盘**（不产生无意义的文件改动与备份）。
+        # 不放进 `self.errors` —— 那是"载入出了问题"的位置，而这是一次**正常**的升级动作。
+        data, n = migrate_alias_keys(data, path=p)
+        if n:
+            print(f"[registry] 别名迁移（v117）：{n} 条覆写键已从旧别名改写为新别名，"
+                  "原文件已备份。")
         return {k: v for k, v in data.items() if not k.startswith("_")}
 
     #: 白盒模式允许的工具（前缀或精确名）。

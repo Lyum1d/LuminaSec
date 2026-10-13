@@ -259,6 +259,21 @@ def classify(p: Path) -> tuple[str, str] | None:
     return None
 
 
+def _resolve_java(root: dict[str, Any], ttype: str) -> str:
+    """.jar 的 Java 大版本：**根级 `java` 字段要真的生效**。
+
+    优先级：条目级 `type` 覆写（在调用处处理）> 根级 `java` > 默认 `JAVA8`。
+
+    ⚠️ v115 修：`normalize_root()` 一直把根级 `java` 存下来、控制台也有入口，
+    但**没有任何地方读它** ⇒ 用户把某个目录设成 JAVA11，程序仍静默用 JAVA8 跑 `.jar`。
+    `executor` 早就支持 `JAVA8_BIN`/`JAVA11_BIN` 两条路径，缺的只是这一环。
+    """
+    if ttype not in ("JAVA8", "JAVA11"):
+        return ttype
+    want = str(root.get("java") or "").strip().upper()
+    return want if want in ("JAVA8", "JAVA11") else ttype
+
+
 #: 别名推导退化成占位名的形态（`_make_alias` 在文件名推不出 ASCII 时的兜底）。
 _PLACEHOLDER_ALIAS_RE = re.compile(r"^tool(_\d+)?$")
 
@@ -337,7 +352,8 @@ def scan_root(root: dict[str, Any]) -> dict[str, Any]:
             "rel_path": rel_posix,
             "abs_path": str(f),
             "name": str(ov.get("name") or f.stem),
-            "type": str(ov.get("type") or ttype),
+            # 条目级 `type` 覆写优先；否则 `.jar` 按**根级 java** 定（v115 修，见 _resolve_java）
+            "type": str(ov.get("type") or _resolve_java(r, ttype)),
             "category": cat,
             "description": str(ov.get("description") or ""),
             "size": (f.stat().st_size if f.exists() else 0),

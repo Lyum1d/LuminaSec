@@ -20,7 +20,7 @@ from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import httpx
 
-from . import config, ratelimit, scope, traffic
+from . import config, scope, traffic
 
 _UA = "SRC-Agent-Replay/1.0 (authorized bug-bounty test)"
 _ALLOWED_METHODS = {"GET", "HEAD", "OPTIONS"}
