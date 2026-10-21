@@ -1,0 +1,15 @@
+admin
+login
+api
+robots.txt
+config
+backup
+upload
+phpmyadmin
+.git
+.htaccess
+admin/login
+user
+users
+panel
+dashboard

@@ -1,0 +1,449 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LuminaSec · 控制台</title>
+<link rel="stylesheet" href="/static/style.css?v=014">
+<script>try{document.documentElement.setAttribute('data-theme', localStorage.getItem('src_theme')||'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}</script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ 左侧边栏 ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">🛡</div>
+      <div class="brand-text">
+        <div class="brand-name">LuminaSec</div>
+        <div class="brand-sub">渗透测试编排</div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <label class="side-label">决策模型</label>
+      <select id="modelSelect" onchange="switchModel(this.value)" title="选择决策模型"></select>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="proj">项目</div>
+      <div class="tab" data-tab="tools">工具箱</div>
+      <!-- v102：白盒专属标签页；只有白盒模式显示（applyModeUI 控制） -->
+      <div class="tab" data-tab="code" id="tabBtnCode" style="display:none;">代码库</div>
+    </div>
+
+    <div id="tab-proj" class="tab-pane">
+      <div class="panel-body" id="projectList"></div>
+      <div class="new-proj">
+        <input id="pName" placeholder="项目名称，如：补天-XX厂商">
+        <input id="pTarget" placeholder="目标：企业名 / 域名">
+        <button class="primary" onclick="createProject()">+ 新建项目</button>
+      </div>
+    </div>
+
+    <div id="tab-tools" class="tab-pane" style="display:none;">
+      <div class="tool-search">
+        <input id="toolSearch" placeholder="搜索工具…" oninput="renderTools()">
+        <select id="toolKind" onchange="renderTools()">
+          <option value="launchable">本地工具（点击启动）</option>
+          <option value="scriptable">可编排工具（Agent 自动调用）</option>
+          <option value="web">网页工具</option>
+          <option value="all">全部</option>
+        </select>
+      </div>
+      <div class="panel-body" id="toolList"></div>
+    </div>
+
+    <!-- v102：白盒面板 —— 已入库代码库（只读；登记/删除在配置控制台） -->
+    <div id="tab-code" class="tab-pane" style="display:none;">
+      <div class="panel-body" id="codebaseList"></div>
+      <div class="side-foot">
+        <button class="ghost" onclick="switchMode()">⇄ 切换工作模式</button>
+        <a class="ghost" href="/console" target="_blank" rel="noopener"
+           style="display:block;text-align:center;margin-top:6px;text-decoration:none;">
+          在配置控制台管理代码库 / 知识库 →
+        </a>
+      </div>
+    </div>
+
+    <div class="side-foot">
+      <button class="ghost" onclick="openSettings()">⚙ 模型供应商设置</button>
+    </div>
+  </aside>
+
+  <!-- ============ 主聊天区 ============ -->
+  <main class="chat">
+    <header class="chat-head">
+      <div class="project-info">
+        <span class="p-name" id="currentProjectName">未选择项目</span>
+        <span class="p-target" id="currentProjectTarget"></span>
+      </div>
+      <!-- v102：当前工作模式徽标；点一下回到起始选择界面换模式 -->
+      <button class="ghost mode-badge" id="modeBadge" onclick="switchMode()"
+              title="切换工作模式">🌐 黑盒侧测试</button>
+      <div class="status" id="status"></div>
+      <button class="ghost usage-btn" id="usageBtn" onclick="openUsage()" title="Token 用量统计">📊 用量 <span class="usage-badge" id="usageBadge"></span></button>
+      <button class="ghost icon-btn" id="themeToggle" onclick="toggleTheme()" title="切换亮/暗主题">🌙</button>
+      <button class="ghost" id="toggleRightBtn" onclick="toggleRight()">报告 ▸</button>
+    </header>
+
+    <!-- ============ 线索树（横向小地图） ============ -->
+    <div class="tree-bar" id="treeBar">
+      <span class="tree-label">线索树</span>
+      <div class="tree-strip" id="treeStrip"></div>
+      <div class="tree-acts">
+        <button class="mini" onclick="openBranchModal(state.sessionId || '')" title="从当前线索开辟一条新分支">＋ 分支</button>
+        <button class="mini" onclick="newThread()" title="另起一条独立的主对话">＋ 新对话</button>
+      </div>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-logo">🛡</div>
+        <div class="welcome-title">LuminaSec 渗透测试编排助手</div>
+        <div class="welcome-sub">先建一个「项目」并填写目标，然后描述你的任务，我会自动调度工具箱执行。</div>
+        <div class="welcome-hints">
+          <span>目标：企业名 / 域名 / IP</span>
+          <span>风险 L0-L3 分级确认</span>
+          <span>支持任意 OpenAI 兼容 / Anthropic 模型</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirmBox"></div>
+
+    <div class="input-bar">
+      <textarea id="taskInput" rows="1" placeholder="描述任务，例如：对目标做信息收集与指纹识别（Enter 发送，Shift+Enter 换行）"
+        onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendTask();}"></textarea>
+      <button class="primary send" id="sendBtn" onclick="sendTask()">发送</button>
+    </div>
+  </main>
+
+  <!-- ============ 右侧面板（可折叠） ============ -->
+  <aside class="right" id="rightPanel">
+    <div class="panel-head">
+      漏洞发现
+      <button class="mini" onclick="toggleFindingForm()">+ 添加</button>
+    </div>
+    <div id="findingForm" class="form-card" style="display:none;">
+      <input id="fTitle" placeholder="漏洞名称">
+      <div class="row">
+        <select id="fSev"><option>高危</option><option>中危</option><option>低危</option><option>严重</option><option>信息</option></select>
+        <input id="fTarget" placeholder="影响目标">
+      </div>
+      <textarea id="fDetail" placeholder="漏洞描述"></textarea>
+      <textarea id="fEvidence" placeholder="复现步骤 / 回显证据"></textarea>
+      <button class="primary" onclick="addFinding()">保存</button>
+    </div>
+    <div class="panel-body" id="findingList"><div class="empty">暂无记录</div></div>
+
+    <div class="panel-head">
+      请求库 <span class="badge" id="reqLibCount">0</span>
+      <button class="mini" onclick="document.getElementById('importFile').click()">导入</button>
+    </div>
+    <input type="file" id="importFile" accept=".xml,.har" style="display:none;" onchange="importRequests(this)">
+    <div class="panel-body" id="reqLibList"><div class="empty">暂无导入请求（Burp 右键 Save items 导出 XML，或浏览器导出 HAR）</div></div>
+
+    <div class="panel-head">
+      测试身份 <span class="badge" id="identityCount">0</span>
+      <button class="mini" onclick="toggleIdentityForm()">+ 登记</button>
+    </div>
+    <div id="identityForm" class="form-card" style="display:none;">
+      <input id="identityLabel" placeholder="标签，如 account_a / anonymous">
+      <div style="display:flex; gap:6px;">
+        <select id="identityRole" style="flex:1;">
+          <option value="anonymous">匿名</option>
+          <option value="user" selected>普通用户</option>
+          <option value="admin">管理员（如有测试账号）</option>
+        </select>
+        <input id="identityTenant" placeholder="租户(可选)" style="flex:1;">
+      </div>
+      <input id="identityCheckUrl" placeholder="有效性检查 URL（须在授权范围内，如 https://.../profile）">
+      <textarea id="identityHeaders" placeholder='请求头 JSON（可选），如 {"Authorization": "Bearer xxx"}'></textarea>
+      <textarea id="identityCookies" placeholder='Cookie JSON（可选），如 {"SESSIONID": "xxx"}'></textarea>
+      <div class="form-tip" style="font-size:11px; opacity:.7; margin:4px 0;">凭据经 Windows DPAPI 加密落盘，界面与日志只显示占位摘要，不回显明文。</div>
+      <button class="primary" onclick="addIdentity()">保存身份</button>
+    </div>
+    <div class="panel-body" id="identityList"><div class="empty">暂无测试身份</div></div>
+
+    <div class="panel-head">
+      已证事实 <span class="badge" id="factCount">0</span>
+      <button class="mini" onclick="toggleFactForm()">+ 记录</button>
+    </div>
+    <div id="factForm" class="form-card" style="display:none;">
+      <textarea id="factContent" placeholder="客观事实，一句一事（凭据/漏洞点/敏感路径等），仅记录已证实内容"></textarea>
+      <button class="primary" onclick="addFact()">保存事实</button>
+    </div>
+    <div class="panel-body" id="factList"><div class="empty">暂无已证事实</div></div>
+
+    <div class="report-bar">
+      <button class="ghost" onclick="openBiz()">🧪 业务测试</button>
+      <button class="ghost" onclick="openTraffic()">🛡 流量安全</button>
+      <button class="ghost" onclick="openGraph()">🗺 线索图</button>
+      <button class="ghost" onclick="viewReport()">查看报告</button>
+      <button class="primary" onclick="exportReport()">导出报告</button>
+    </div>
+  </aside>
+
+</div>
+
+<!-- ============ 线索图（攻击图 / 因果图） ============ -->
+<div id="graphModal" class="modal-mask">
+  <div class="modal graph-modal">
+    <div class="modal-head">
+      <b>线索图 · 项目推理全景</b>
+      <div class="graph-tabs">
+        <div class="gtab active" id="gTabAttack" onclick="switchGraph('attack')">攻击图</div>
+        <div class="gtab" id="gTabCausal" onclick="switchGraph('causal')">因果图</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="ghost sm" onclick="graphFit()" title="缩放平移到刚好容纳全图">适应窗口</button>
+        <button class="mini" id="gDeriveBtn" onclick="deriveCausal()" title="按现有工具执行 / 已证事实 / 漏洞发现重建整张因果图">从数据派生</button>
+        <button class="mini" onclick="closeGraph()">关闭</button>
+      </div>
+    </div>
+    <div class="graph-legend" id="graphLegend"></div>
+    <div class="graph-canvas" id="graphCanvas"></div>
+    <div class="graph-hint">滚轮缩放 · 拖拽平移 · 双击空白适应窗口 · 单击节点看详情；攻击图上单击「线索」节点可直接切到那条对话。</div>
+  </div>
+</div>
+
+<!-- ============ 业务测试工作台（v017） ============ -->
+<div id="bizModal" class="modal-mask">
+  <div class="modal" style="width:min(1000px,94vw); height:min(720px,92vh); display:flex; flex-direction:column;">
+    <div class="modal-head">
+      <b>业务逻辑测试 · 身份差分 / 流程检查</b>
+      <div style="display:flex;gap:8px;">
+        <button class="sm" onclick="closeBiz()">关闭</button>
+      </div>
+    </div>
+    <div class="modal-tip" style="flex:none;">
+      只读方法（GET/HEAD/OPTIONS）自动执行；差分：同身份替换对象 ID 看是否越权；流程：勾选多条请求按顺序组成链，检测能否跳过前置步骤。suspect 结果仅为候选建议，需人工复核确认。
+    </div>
+    <div style="flex:1; min-height:0; display:flex; gap:10px; overflow:hidden;">
+      <!-- 左：请求列表（可勾选组成流程） -->
+      <div style="flex:1.2; display:flex; flex-direction:column; min-width:0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <b style="font-size:12px;">请求库（勾选可组成流程链，顺序=勾选顺序）</b>
+          <button class="mini" onclick="document.getElementById('importFile2').click()">导入</button>
+        </div>
+        <input type="file" id="importFile2" accept=".xml,.har" style="display:none;" onchange="importRequests(this, loadBizRequests)">
+        <div id="bizReqList" style="flex:1; overflow:auto; border:1px solid rgba(128,128,128,.25); border-radius:8px; padding:6px;">
+          <div class="empty">加载中…</div>
+        </div>
+        <button class="primary" style="margin-top:6px;" onclick="runFlowFromWorkbench()">▶ 流程检查（勾选的请求按序执行）</button>
+      </div>
+      <!-- 右：差分参数 + 结果 -->
+      <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+        <b style="font-size:12px; margin-bottom:4px;">身份差分（单请求 × 对象替换）</b>
+        <div style="display:flex; flex-direction:column; gap:5px;">
+          <select id="bizIdentity"><option value="">— 选择基准身份 —</option></select>
+          <input id="bizField" placeholder="对象字段名（如 orderId / userId）">
+          <select id="bizLocation">
+            <option value="query">query 参数</option>
+            <option value="path">URL 路径段</option>
+            <option value="body">请求体字段</option>
+          </select>
+          <input id="bizValue" placeholder="目标对象值（从响应或页面中取得他人对象 ID）">
+          <label style="font-size:12px;"><input type="checkbox" id="bizAnon" checked> 追加匿名对照（未授权检测）</label>
+          <button class="primary" onclick="runDiffFromWorkbench()">▶ 执行身份差分</button>
+        </div>
+        <div id="bizResult" style="flex:1; overflow:auto; margin-top:8px; border:1px solid rgba(128,128,128,.25); border-radius:8px; padding:8px; font-size:12px;">
+          <div class="empty">差分/流程结果将显示在这里</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 流量安全面板（v023.5） ============ -->
+<div id="trafficModal" class="modal-mask">
+  <div class="modal" style="width:min(980px,94vw); height:min(700px,92vh); display:flex; flex-direction:column;">
+    <div class="modal-head">
+      <b>流量安全 · 目标状态与审计</b>
+      <div style="display:flex;gap:8px;">
+        <button class="sm" onclick="exportTrafficReport()">导出流量审计</button>
+        <button class="sm" onclick="closeTraffic()">关闭</button>
+      </div>
+    </div>
+    <div class="modal-tip" style="flex:none;">
+      检测到封禁迹象（连接重置/拒绝/连续超时/429/验证码）会立即停止对目标的自动请求，不自动重试、不换参数绕过。恢复需人工发起单次只读探测并确认。
+    </div>
+    <div style="flex:1; min-height:0; display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+      <div id="trafficStateBar" style="flex:none; display:flex; gap:8px; flex-wrap:wrap;"></div>
+      <div style="display:flex; gap:6px; flex:none;">
+        <button class="sm" onclick="trafficPauseAll()">暂停本项目所有目标</button>
+        <button class="sm" onclick="loadTraffic()">刷新</button>
+      </div>
+      <div id="trafficList" style="flex:1; overflow:auto; border:1px solid rgba(128,128,128,.25); border-radius:8px; padding:6px;"></div>
+      <div style="flex:none;">
+        <b style="font-size:12px;">最近流量事件</b>
+        <div id="trafficEvents" style="max-height:150px; overflow:auto; font-size:11px; opacity:.85; margin-top:4px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 设置 · 通用 LLM 供应商管理 ============ -->
+<div id="settingsModal" class="modal-mask">
+  <div class="modal">
+    <div class="modal-head">
+      <b>模型设置 · 通用 LLM 接入</b>
+      <div style="display:flex;gap:8px;">
+        <button class="sm" onclick="closeSettings();openUsage()">📊 用量统计</button>
+        <button class="sm" onclick="closeSettings()">关闭</button>
+      </div>
+    </div>
+
+    <div class="modal-tip">
+      任何 <b>OpenAI 兼容端点</b>（/chat/completions）与 <b>Anthropic 原生端点</b>（/v1/messages）都能接入：
+      填 Base URL + API Key + 模型名即可。配置保存在个人目录 <code id="storeFileTip">%USERPROFILE%\.src_agent_llm.json</code>，
+      不进项目仓库；保存后无需重启服务。
+    </div>
+
+    <div class="prov-bar">
+      <select id="presetSelect" style="flex:1;"></select>
+      <button onclick="addFromPreset()">+ 从模板添加</button>
+      <button class="primary" onclick="openProviderForm('')">+ 自定义</button>
+    </div>
+
+    <div id="providerList" class="prov-list"><div class="empty">加载中…</div></div>
+
+    <div class="prov-route">
+      <label><input type="checkbox" id="autoRouteChk" onchange="saveAutoRoute()">
+        漏洞验证类任务自动路由到云端</label>
+      <select id="autoRouteSel" onchange="saveAutoRoute()" style="max-width:220px;"></select>
+    </div>
+
+    <!-- 编辑表单 -->
+    <div id="providerForm" style="display:none;border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:10px;">
+      <div class="row">
+        <input id="pfName" placeholder="供应商名称，如：通义千问">
+        <select id="pfType" onchange="onProviderTypeChange()" style="max-width:150px;">
+          <option value="openai">OpenAI 兼容</option>
+          <option value="anthropic">Anthropic 原生</option>
+        </select>
+      </div>
+      <div class="row"><input id="pfBase" placeholder="Base URL，如 https://api.deepseek.com/v1"></div>
+      <div class="row"><input id="pfKey" type="password" placeholder="API Key（留空 = 不修改已有密钥）"></div>
+      <div class="row">
+        <input id="pfModel" placeholder="模型名，如 deepseek-chat">
+        <button style="max-width:120px;" onclick="fetchProviderModels()">拉取模型</button>
+      </div>
+      <select id="pfModelPick" style="display:none;width:100%;margin-bottom:8px;"
+              onchange="if(this.value)$('pfModel').value=this.value"></select>
+      <div class="row" style="flex-wrap:wrap;gap:12px;">
+        <label class="chk"><input type="checkbox" id="pfThinking"> 本地思考模式（Ollama 必开）</label>
+        <label class="chk"><input type="checkbox" id="pfLocal"> 本地部署（免 Key）</label>
+        <label class="chk"><input type="checkbox" id="pfDisabled"> 停用</label>
+        <input id="pfTimeout" type="number" min="30" max="1200" placeholder="超时(秒)" style="max-width:120px;">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <button class="primary" style="flex:1;" onclick="saveProviderForm()">保存</button>
+        <button style="flex:1;" onclick="closeProviderForm()">取消</button>
+      </div>
+      <div id="pfState" class="muted" style="margin-top:6px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 开辟新线索 ============ -->
+<div id="branchModal" class="modal-mask">
+  <div class="modal" style="width:600px;">
+    <div class="modal-head">
+      <b>开辟新线索</b>
+      <button class="sm" onclick="closeBranchModal()">关闭</button>
+    </div>
+    <div class="modal-tip">
+      新线索是一条<b>独立对话</b>，会带上你勾选的记录开局，专心挖这一个方向；
+      主对话和其他线索不受影响，随时可在聊天区上方的「线索树」里切换。
+    </div>
+    <div class="row"><input id="bTitle" placeholder="线索名称，如：admin.php 疑似 SQL 注入"></div>
+    <div class="row"><textarea id="bNote" rows="2" placeholder="补充说明（可选）：这个方向为什么要深挖、目前已经知道什么"></textarea></div>
+    <div class="modal-tip" style="margin-bottom:6px;">勾选要打包带走的记录（来自当前线索的历史步骤）：</div>
+    <div id="branchCandidates" class="branch-cands"><div class="empty">加载中…</div></div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="primary" style="flex:1;" onclick="confirmCreateBranch()">创建线索并切换过去</button>
+      <button onclick="closeBranchModal()">取消</button>
+    </div>
+    <div id="branchState" class="muted" style="margin-top:6px;"></div>
+  </div>
+</div>
+
+<!-- ============ Token 用量统计 ============ -->
+<div id="usageModal" class="modal-mask">
+  <div class="modal usage-modal">
+    <div class="modal-head">
+      <b>📊 Token 用量统计</b>
+      <button class="sm" onclick="closeUsage()">关闭</button>
+    </div>
+    <div class="modal-tip">自功能上线起统计；费用为按单价表的估算值（人民币），单价可在下方自行调整。本地 Ollama 统计 token、费用为 0。</div>
+
+    <div class="usage-cards">
+      <div class="ucard"><div class="uc-t">今日</div><div class="uc-n" id="uTodayTok">-</div><div class="uc-c" id="uTodayCost">-</div><div class="uc-m" id="uTodayCalls"></div></div>
+      <div class="ucard"><div class="uc-t">本月</div><div class="uc-n" id="uMonthTok">-</div><div class="uc-c" id="uMonthCost">-</div><div class="uc-m" id="uMonthCalls"></div></div>
+      <div class="ucard"><div class="uc-t">累计</div><div class="uc-n" id="uTotalTok">-</div><div class="uc-c" id="uTotalCost">-</div><div class="uc-m" id="uTotalCalls"></div></div>
+    </div>
+
+    <div class="usage-sec">
+      <div class="usage-sec-title">按天趋势（tokens）</div>
+      <div id="uDailyChart" class="usage-chart"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="usage-sec two-col">
+      <div>
+        <div class="usage-sec-title">按模型</div>
+        <div id="uByModel" class="usage-bars"></div>
+      </div>
+      <div>
+        <div class="usage-sec-title">按项目</div>
+        <div id="uByProject" class="usage-bars"></div>
+      </div>
+    </div>
+
+    <div class="usage-sec">
+      <div class="usage-sec-title">调用明细</div>
+      <div class="usage-filters">
+        <select id="uFilterProject" onchange="loadUsageList()"><option value="">全部项目</option></select>
+        <select id="uFilterModel" onchange="loadUsageList()"><option value="">全部模型</option></select>
+        <select id="uFilterDays" onchange="loadUsageList()">
+          <option value="0">全部时间</option>
+          <option value="1">今天</option>
+          <option value="7">最近 7 天</option>
+          <option value="30">最近 30 天</option>
+        </select>
+        <span class="flex-sp"></span>
+        <button class="sm" onclick="exportUsage()">导出 CSV</button>
+        <button class="sm danger" onclick="clearUsageAsk()">清理记录…</button>
+      </div>
+      <div class="usage-table-wrap">
+        <table class="usage-table" id="uTable">
+          <thead><tr><th>时间</th><th>项目</th><th>模型</th><th>输入</th><th>输出</th><th>耗时</th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="usage-sec">
+      <div class="usage-sec-title">模型单价（人民币 元/百万 token；输入/输出分开）</div>
+      <div class="usage-table-wrap">
+        <table class="usage-table" id="uPriceTable">
+          <thead><tr><th>模型（provider:model 或模型名）</th><th>输入价</th><th>输出价</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="sm" onclick="addPriceRow()">+ 新增单价</button>
+        <span class="flex-sp"></span>
+        <button class="sm" onclick="resetPrices()">恢复默认价</button>
+        <button class="primary sm" onclick="savePrices()">保存单价</button>
+      </div>
+      <div id="uPriceState" class="muted" style="margin-top:4px;"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/graph.js?v=014"></script>
+<script src="/static/app.js?v=014"></script>
+</body>
+</html>

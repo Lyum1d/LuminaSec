@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LuminaSec · 配置控制台</title>
+<link rel="stylesheet" href="/console-assets/console.css?v=052">
+<script>
+// 主题与作战界面共用同一个 localStorage 键，切一次两边都跟着变。
+try { document.documentElement.setAttribute('data-theme',
+      localStorage.getItem('src_theme') || 'dark'); } catch (e) {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
+</script>
+</head>
+<body>
+
+<!-- ============ 登录闸门（未登录时遮盖全站） ============ -->
+<div id="loginMask" class="login-mask" hidden>
+  <div class="login-card">
+    <div class="login-logo"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+      <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"
+            fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.6" fill="none"/>
+    </svg></div>
+    <h1>配置控制台</h1>
+    <p class="login-sub">LuminaSec · 本机运维界面</p>
+    <div id="loginMsg" class="login-msg"></div>
+    <!-- 登录表单（口令已配置时显示） -->
+    <div id="loginWrap">
+      <input id="pw" type="password" placeholder="控制台口令" autocomplete="current-password">
+      <button id="loginBtn" class="primary">进入</button>
+    </div>
+    <!-- 首次设置表单（口令未配置时显示）：写入本机 config.yaml，长期保存 -->
+    <div id="setupWrap" hidden>
+      <input id="newPw" type="password" placeholder="设置控制台口令（至少 8 位）"
+             autocomplete="new-password">
+      <input id="newPw2" type="password" placeholder="再次输入以确认" autocomplete="new-password">
+      <button id="setupBtn" class="primary">设置口令并进入</button>
+      <p class="login-hint">
+        口令会<strong>写入本机 <code>config.yaml</code>（<code>consolePassword</code>）长期保存</strong>，
+        重启服务不丢，不需要每次重设。设置成功即自动登录。
+      </p>
+    </div>
+    <p class="login-hint">
+      口令也可来自环境变量 <code>AGENT_CONSOLE_PASSWORD</code>（<strong>优先级最高</strong>）
+      或本机 <code>config.yaml</code> 的 <code>consolePassword</code>。
+      <strong>未设置时本控制台一律拒绝访问</strong> —— 它能改授权白名单，不能默认敞开。
+    </p>
+  </div>
+</div>
+
+<div class="app" id="appRoot" hidden>
+  <!-- ============ 侧栏 ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"
+              fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.6" fill="none"/>
+      </svg></div>
+      <div>
+        <div class="brand-name">配置控制台</div>
+        <div class="brand-sub">LuminaSec</div>
+      </div>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-view="overview">总览</button>
+      <button class="tab" data-view="scope">授权白名单</button>
+      <button class="tab" data-view="tools">工具与分级</button>
+      <!-- v110：本机自备工具目录（加目录 → 自动识别 → 并入工具箱）。
+           与「工具与分级」是同一件事的两半，所以紧挨着放。 -->
+      <button class="tab" data-view="localtools">本地工具</button>
+      <button class="tab" data-view="params">运行参数</button>
+      <button class="tab" data-view="rules">合规与模板</button>
+      <!-- v102：白盒侧（代码库 / 知识库）—— 与「授权白名单」同类，都是范围/授权性质的写入口 -->
+      <button class="tab" data-view="whitebox">白盒侧</button>
+      <button class="tab" data-view="monitor">实时监控</button>
+      <button class="tab" data-view="charts">统计看板</button>
+      <button class="tab" data-view="audit">合规审计</button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="ghost sm" id="themeBtn">切换主题</button>
+      <button class="ghost sm" id="logoutBtn">退出登录</button>
+      <div class="side-note" id="whoami"></div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+    <div class="topbar">
+      <div id="viewTitle" class="view-title">总览</div>
+      <div class="topbar-right">
+        <a class="ghost sm" href="/" target="_blank" rel="noopener">作战界面</a>
+        <span id="fileHint" class="file-hint"></span>
+      </div>
+    </div>
+
+    <!-- 说明：控制台只改「允许打哪里」，不放宽任何执行能力。这行固定显示。 -->
+    <div class="banner">
+      本控制台只修改<strong>配置</strong>（允许打哪里、工具怎么分级、闸门怎么设），
+      <strong>不放宽任何执行能力</strong>。真正的边界仍是 py_exec 沙箱 + 流量治理
+      + <code>data/scope.json</code> + Burp 侧人工闸门。
+    </div>
+
+    <div id="viewHost" class="view-host"></div>
+  </main>
+</div>
+
+<div id="toastHost" class="toast-host"></div>
+
+<!-- diff / 二次确认 弹窗 -->
+<div id="modalMask" class="modal-mask" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <b id="modalTitle">确认</b>
+      <button class="ghost sm" id="modalX">关闭</button>
+    </div>
+    <div id="modalBody" class="modal-body"></div>
+    <div class="modal-foot">
+      <label id="modalAckWrap" class="ack" hidden>
+        <input type="checkbox" id="modalAck">
+        <span id="modalAckText">我确认以上改动</span>
+      </label>
+      <div class="modal-actions">
+        <button class="ghost" id="modalCancel">取消</button>
+        <button class="danger" id="modalOk">确认提交</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/console-assets/core.js?v=112"></script>
+</body>
+</html>
