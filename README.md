@@ -1,6 +1,6 @@
 # LuminaSec · 本地控制台
 
-**正式版 1.008**
+**正式版 1.009**
 
 > **1.006 起产品更名为 LuminaSec**（原「SRC 渗透 Agent」）。启动时终端里那行文字标题
 > 换成由符号拼成的大标题；网页标题、界面顶栏品牌名、更新器标题同步变更。
@@ -250,7 +250,7 @@ SRC-Agent/
 ├── 启动控制台.bat             一键启动（GBK + CRLF，含解释器探测）
 ├── update.py                 更新工具源码（打包为 update.exe 随发布包分发）
 ├── release_repo.txt          更新源（第一行 owner/repo，改这里即换库）
-├── VERSION.txt               版本号（本版 1.008）
+├── VERSION.txt               版本号（本版 1.009）
 ├── SHA256SUMS.txt            发布清单（更新器逐文件校验用）
 ├── config.yaml.example       本机配置模板（复制为 config.yaml 使用，该文件不入库）
 ├── app/

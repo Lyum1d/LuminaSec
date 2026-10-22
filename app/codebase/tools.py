@@ -205,15 +205,42 @@ def _h_search(target: str, args: str) -> str:
 
     # deps
     sb = B.build(target)
+    if query.lower() in ("all", "*", "--all", "-a"):
+        # 全量清单：`deps`（无参）只给统计与线索，要看全部得显式要
+        if not sb.deps:
+            return "依赖清单为空（未找到可解析的清单文件）。用 `deps` 看统计与未解析登记。"
+        by_eco: dict[str, list] = {}
+        for d2 in sb.deps:
+            by_eco.setdefault(d2.ecosystem, []).append(d2)
+        out: list[str] = [f"全量依赖 {len(sb.deps)} 条（{len(by_eco)} 个生态）"
+                           + (f"；另有 {len(sb.platform)} 条平台版本（见 `deps`）" if sb.platform else "") + "："]
+        for eco in sorted(by_eco):
+            out.append(f"\n[{eco}] {len(by_eco[eco])} 条")
+            out += [f"  {d2.render()}" for d2 in by_eco[eco][:80]]
+            if len(by_eco[eco]) > 80:
+                out.append(f"  …（{eco} 共 {len(by_eco[eco])} 条，只显示前 80 条）")
+        return "\n".join(out)
     if query:
         deps = sb.find(query)
-        if not deps:
-            return f"依赖里没有名字含「{query}」的。（用 `deps` 看全清单）"
-        body = "\n".join(d.render() for d in deps[:40])
-        return f"名字含「{query}」的依赖 {len(deps)} 条：\n{body}"
+        plat = [p for p in sb.platform if query.lower() in p.name.lower()]
+        if not deps and not plat:
+            return f"依赖里没有名字含「{query}」的。（用 `deps` 看统计，`deps all` 看全清单）"
+        out: list[str] = []
+        if plat:
+            out.append(f"运行时/平台版本 {len(plat)} 条"
+                       "（**声明≠线上实际版本**；只有「精确版本」能与补丁版本比较）：")
+            out += [f"  {p.render()}" for p in plat]
+        if deps:
+            out.append(f"依赖 {len(deps)} 条：")
+            out += [d.render() for d in deps[:40]]
+        return "\n".join(out)
     st = sb.stats()
     lines = [f"依赖清单：{st['deps']} 条（已解析实际版本的 {st['resolved']} 条）；"
              f"清单文件 {st['files']} 个；生态分布 {st['by_ecosystem']}"]
+    if sb.platform:
+        lines.append(f"运行时/平台版本声明 {len(sb.platform)} 条"
+                     "（**声明≠线上实际版本**；「版本约束」不能直接比大小）：")
+        lines += [f"  {p.render()}" for p in sb.platform]
     if st["unparsed"]:
         lines.append(f"⚠️ 未解析的清单（**这些没查**）：{sb.unparsed}")
     if st["parse_errors"]:
@@ -224,7 +251,7 @@ def _h_search(target: str, args: str) -> str:
         lines += [f"  {d.render()}" for d in cl[:20]]
     else:
         lines.append("没有带线索的依赖。")
-    lines.append("\n要看某个包：`deps <名字>`。")
+    lines.append("\n要看某个包：`deps <名字>`；看全量清单：`deps all`。")
     return "\n".join(lines)
 
 

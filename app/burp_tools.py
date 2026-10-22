@@ -66,15 +66,27 @@ def parse_raw_request(raw: str) -> dict:
     官方扩展要求 content 是**完整 raw 请求**（含请求行、头、空行、体），且
     换行建议用 CRLF。这里只解析我们关心的部分——方法用于闸门判定，路径用于
     日志与 URL 拼装。头的解析交给 Burp，不重复实现一套 HTTP 解析器。
+
+    返回的 ``raw`` **必须是调用方给的原串**：只允许在「归一化副本」上跑正则
+    （以兼容 CRLF 与裸 LF 两种输入），绝不能把归一化后的串放进返回值。
+
+    历史坑（2026-10-21 真机实测）：原实现先把 raw 的 CRLF 全局替换成 LF，再把
+    改写过的串放进返回值，于是**整个请求体（含 multipart 的 boundary 分隔行）
+    都被压成 LF** 后交给 Burp。目标端 python-multipart 要求分隔符前必须是 CRLF，
+    实测 ``POST /upload`` 直接返回 400 ``There was an error parsing the body``
+    ——文件根本没落盘；含 CRLF 的表单体同理会坏。解析自己只看起始行，没有任何
+    理由改写 body。用单发 ``\\r\\r\\n`` 反向编码去“骗过”归一化属于临时绕法，
+    根因必须在这里修。
     """
-    raw = (raw or "").replace("\r\n", "\n")
-    m = _REQUEST_LINE_RE.search(raw)
+    raw_original = raw or ""
+    # 归一化副本：仅用于起始行正则匹配（兼容 CRLF / LF 两种输入）
+    m = _REQUEST_LINE_RE.search(raw_original.replace("\r\n", "\n"))
     if not m:
         raise BurpRequestError(
             "raw 请求缺少合法的起始行。需形如 `GET /path HTTP/1.1`（第一行），"
             "并且要包含 Host 头与末尾空行。")
     method, path, ver = m.group(1).upper(), m.group(2), m.group(3)
-    return {"method": method, "path": path, "http_version": ver, "raw": raw}
+    return {"method": method, "path": path, "http_version": ver, "raw": raw_original}
 
 
 def split_target(target: str) -> tuple[str, int, bool]:

@@ -51,15 +51,22 @@ except ModuleNotFoundError:                                 # pragma: no cover
 MAX_DEPS = 5000
 
 #: 未支持的清单（**要显式记下来**，不能当作「没有依赖」）
-UNSUPPORTED = ("yarn.lock", "pnpm-lock.yaml", "Gemfile.lock", "go.sum",
-               "Pipfile.lock", "poetry.lock", "packages.config", "gradle.lockfile")
+#:
+#: 2026-10-22 补：原来只有 8 项，`uv.lock` / `bun.lockb` / `Podfile` / `pubspec.*`
+#: 这类常见清单漏在名单外 → 被静默忽略（同一个毛病：查了却像没查）。
+#: 这里只做「见过但没解析」的登记，解析器没加就不该假装有覆盖。
+UNSUPPORTED = ("yarn.lock", "pnpm-lock.yaml", "Gemfile.lock", "go.sum", "go.work",
+               "Pipfile.lock", "poetry.lock", "uv.lock", "packages.config",
+               "gradle.lockfile", "bun.lockb", "bun.lock", "deno.lock",
+               "mix.lock", "mix.exs", "Podfile", "Podfile.lock",
+               "pubspec.yaml", "pubspec.lock", "Package.resolved")
 
 
 @dataclass
 class Dep:
     name: str
     version: str
-    ecosystem: str            # composer | maven | pip | npm
+    ecosystem: str            # composer | maven | pip | npm | go | ruby | rust
     scope: str = "runtime"    # runtime | dev | test | optional | parent | plugin
     source_file: str = ""
     line: int = 0             # 能定位就填（文本类清单行号可靠；JSON/XML 类为 0）
@@ -78,9 +85,36 @@ class Dep:
 
 
 @dataclass
+class PlatformVer:
+    """运行时/平台版本声明。**不是依赖包** —— 所以不进 `deps`。
+
+    为什么单列一类：`composer.json` 的 `require.php`、`Dockerfile` 的 `FROM php:…`
+    描述的是**语言运行时**，和「装了什么库」是两件事。混进 `deps` 会把去重键
+    （生态, 名字）、`by_ecosystem()` 统计、`resolved` 语义全部带歪；而运行时版本
+    恰恰是「组件漏洞排查」（如 PHP 解释器 CVE）唯一能用的字段。
+
+    `exact=True`：**精确版本**（Dockerfile `FROM` / `.php-version` / `.tool-versions` /
+    `composer.lock` 的 `platform-overrides` / `composer.json` 的 `config.platform.php`）。
+    `exact=False`：只是**约束**（`>=8.1`、`^8.2`）——**不能拿去和某个修复版比大小**，
+    只能回答「这个约束是否把目标版本排除在外」。
+
+    ⚠️ 无论哪种，**源码里的声明都 ≠ 线上实际部署的版本**。
+    """
+    name: str
+    version: str
+    source_file: str
+    exact: bool = False
+
+    def render(self) -> str:
+        kind = "精确版本" if self.exact else "版本约束（不能直接比大小）"
+        return f"{self.name} {self.version or '(未声明)'} [{kind}] @ {self.source_file}"
+
+
+@dataclass
 class Sbom:
     codebase_id: str
     deps: list[Dep] = field(default_factory=list)
+    platform: list[PlatformVer] = field(default_factory=list)   # 运行时版本（见 PlatformVer）
     files: list[str] = field(default_factory=list)        # 找到并解析的清单文件
     unparsed: list[str] = field(default_factory=list)     # 找到但不支持的
     parse_errors: list[str] = field(default_factory=list)
@@ -101,6 +135,7 @@ class Sbom:
 
     def stats(self) -> dict:
         return {"deps": len(self.deps), "files": len(self.files),
+                "platform": len(self.platform),
                 "unparsed": len(self.unparsed), "parse_errors": len(self.parse_errors),
                 "by_ecosystem": self.by_ecosystem(),
                 "resolved": sum(1 for d in self.deps if d.resolved),
@@ -361,6 +396,234 @@ def _p_pipfile_toml(text: str, rel: str) -> list[Dep]:
     return out
 
 
+# ---------------------------------------------------------------- go / ruby / rust
+#
+# 2026-10-22 补：这三个生态此前**既不在 PARSERS、也不在 UNSUPPORTED** →
+# `code_search deps` 对 Go/Ruby/Rust 项目会静默返回「没有依赖」，
+# 与 Dockerfile 被静默忽略是同一类问题。补上解析后，`go.sum` / `Gemfile.lock`
+# 这类确实没解析的锁文件仍在 UNSUPPORTED 里**显式登记**。
+
+_GO_REQ = re.compile(r"^([A-Za-z0-9][\w.\-/]*)\s+(v[0-9][\w.\-+]*)")
+_GO_LANG = re.compile(r"^\s*go\s+(\d+(?:\.\d+)+)\s*$")
+_GO_TOOLCHAIN = re.compile(r"^\s*toolchain\s+go(\d+(?:\.\d+)+)\s*$")
+
+_GEM_LINE = re.compile(r"""^\s*gem\s+(['"])([^'"]+)\1(.*)$""")
+_GEM_STR = re.compile(r"""['"]([^'"]+)['"]""")
+_GEM_GROUP = re.compile(r"^\s*group\s+(.+?)\s+do\b")
+_RUBY_LINE = re.compile(r"""^\s*ruby\s+['"]([^'"]+)['"]""")
+
+
+def _p_go_mod(text: str, rel: str) -> list[Dep]:
+    """`go.mod`：处理 `require (...)` 块与单行 `require`；`// indirect` 标 indirect。"""
+    out: list[Dep] = []
+    in_block = False
+    for raw in (text or "").splitlines():
+        stripped = raw.split("//", 1)[0].strip()
+        if not stripped:
+            continue
+        if stripped.startswith("require ("):
+            in_block = True
+            continue
+        if in_block and stripped == ")":
+            in_block = False
+            continue
+        if in_block:
+            target = stripped
+        elif stripped.startswith("require "):
+            target = stripped[len("require "):].strip()
+        else:
+            continue                      # module / go / toolchain / replace / exclude / retract
+        m = _GO_REQ.match(target)
+        if m:
+            scope = "indirect" if "// indirect" in raw else "runtime"
+            out.append(_dep(m.group(1), m.group(2), "go", scope=scope, file=rel))
+    return out
+
+
+def _plat_go_mod(text: str, rel: str) -> list[PlatformVer]:
+    """`toolchain go1.22.1` = 精确；`go 1.22` = 语言最低要求（约束）。"""
+    out: list[PlatformVer] = []
+    for raw in (text or "").splitlines():
+        m = _GO_TOOLCHAIN.match(raw)
+        if m:
+            out.append(PlatformVer("go", m.group(1), rel, exact=True))
+            continue
+        m = _GO_LANG.match(raw)
+        if m:
+            out.append(PlatformVer("go", m.group(1), rel, exact=False))
+    return out
+
+
+def _p_gemfile(text: str, rel: str) -> list[Dep]:
+    """`Gemfile`：`gem '名字', '约束'`；`group :development/:test do … end` 内标 dev。
+
+    ⚠️ 近似实现：靠 `group … do` / `end` 配平来判断分组，嵌套了别的 `do` 块时
+    scope 可能判偏 —— 但**依赖清单本身不受影响**（只是 runtime/dev 标注）。
+    """
+    out: list[Dep] = []
+    groups: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        g = _GEM_GROUP.match(line)
+        if g:
+            groups.append(g.group(1).lower())
+            continue
+        if re.match(r"^\s*end\b", line):
+            if groups:
+                groups.pop()
+            continue
+        m = _GEM_LINE.match(line)
+        if not m:
+            continue
+        ver = ",".join(_GEM_STR.findall(m.group(3) or ""))
+        grp = " ".join(groups)
+        scope = "dev" if ("development" in grp or "test" in grp) else "runtime"
+        out.append(_dep(m.group(2), ver, "ruby", scope=scope, file=rel))
+    return out
+
+
+def _plat_gemfile(text: str, rel: str) -> list[PlatformVer]:
+    out: list[PlatformVer] = []
+    for raw in (text or "").splitlines():
+        m = _RUBY_LINE.match(raw)
+        if m:
+            out.append(PlatformVer("ruby", m.group(1), rel, exact=True))
+    return out
+
+
+def _p_cargo_toml(text: str, rel: str) -> list[Dep]:
+    """`Cargo.toml`：dependencies / dev-dependencies / build-dependencies / target.*.dependencies。"""
+    if tomllib is None:
+        raise RuntimeError("需要 Python 3.11+ 的 tomllib")
+    data = tomllib.loads(text)
+    out: list[Dep] = []
+
+    def add(name: str, spec, scope: str) -> None:
+        if isinstance(spec, str):
+            out.append(_dep(name, spec, "rust", scope=scope, file=rel))
+            return
+        if not isinstance(spec, dict):
+            return
+        d = _dep(name, spec.get("version", ""), "rust", scope=scope, file=rel)
+        if spec.get("path"):
+            d.clues.append("本地路径依赖（registry 无法校验其内容）")
+        if spec.get("git"):
+            d.clues.append("从 git 仓库引入（绕过 registry 的版本与完整性校验）")
+        if spec.get("workspace"):
+            d.clues.append("workspace 继承（版本由根 Cargo.toml 决定）")
+        out.append(d)
+
+    for key, scope in (("dependencies", "runtime"), ("dev-dependencies", "dev"),
+                       ("build-dependencies", "build")):
+        for name, spec in (data.get(key) or {}).items():
+            add(str(name), spec, scope)
+    for _target, section in (data.get("target") or {}).items():
+        if not isinstance(section, dict):
+            continue
+        for name, spec in (section.get("dependencies") or {}).items():
+            add(str(name), spec, "runtime")
+    return out
+
+
+def _plat_cargo_toml(text: str, rel: str) -> list[PlatformVer]:
+    """`package.rust-version` 是 **MSRV（最低支持版本）**，属约束而非实际工具链。"""
+    if tomllib is None:
+        return []
+    data = tomllib.loads(text)
+    msrv = (data.get("package") or {}).get("rust-version")
+    return [PlatformVer("rust", str(msrv), rel, exact=False)] if msrv else []
+
+
+# ---------------------------------------------------------------- 平台版本
+#
+# 这些提取器产出 `PlatformVer`，**不进 deps**。加它们的原因（2026-10-22）：
+# php2shell（CVE-2026-109618/109619）这类**解释器层**漏洞，白盒 taint 永远命中不了，
+# 唯一可用的判断依据就是「运行时版本 < 修复版」。而实测发现 SBOM 完全拿不到
+# PHP 版本 —— composer.json 的 php 约束被 `_p_composer_json` 显式跳过，
+# Dockerfile 的 FROM 与 .php-version 连「没查」都没记。
+
+#: `FROM php:8.5.10-fpm-alpine` / `FROM --platform=linux/amd64 php:8.5.10`
+_FROM_PHP_RE = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?php:([0-9]+(?:\.[0-9]+)*)", re.I | re.M)
+
+
+def _plat_composer_json(text: str, rel: str) -> list[PlatformVer]:
+    """`config.platform.php` = 精确（开发者 pin 的平台）；`require.php` = 约束。"""
+    data = json.loads(text)
+    out: list[PlatformVer] = []
+    plat = (data.get("config") or {}).get("platform") or {}
+    if isinstance(plat, dict) and plat.get("php"):
+        out.append(PlatformVer("php", str(plat["php"]).strip(), rel, exact=True))
+    req = (data.get("require") or {}).get("php")
+    if req:
+        out.append(PlatformVer("php", str(req).strip(), rel, exact=False))
+    return out
+
+
+def _plat_composer_lock(text: str, rel: str) -> list[PlatformVer]:
+    """`platform-overrides` = 精确；`platform` = 约束（它记录的是解析时的声明，不是装机版本）。"""
+    data = json.loads(text)
+    out: list[PlatformVer] = []
+    over = data.get("platform-overrides") or {}
+    if isinstance(over, dict) and over.get("php"):
+        out.append(PlatformVer("php", str(over["php"]).strip(), rel, exact=True))
+    plat = data.get("platform") or {}
+    if isinstance(plat, dict) and plat.get("php"):
+        out.append(PlatformVer("php", str(plat["php"]).strip(), rel, exact=False))
+    return out
+
+
+def _plat_dockerfile(text: str, rel: str) -> list[PlatformVer]:
+    """镜像基线里的 PHP 版本 —— 目前最可信的精确来源。"""
+    return [PlatformVer("php", m.group(1), rel, exact=True)
+            for m in _FROM_PHP_RE.finditer(text or "")]
+
+
+def _plat_php_version(text: str, rel: str) -> list[PlatformVer]:
+    """`.php-version`：整个文件就是一个版本号。"""
+    val = (text or "").strip().splitlines()
+    if not val or not val[0].strip():
+        return []
+    return [PlatformVer("php", val[0].strip(), rel, exact=True)]
+
+
+def _plat_tool_versions(text: str, rel: str) -> list[PlatformVer]:
+    """`.tool-versions`：每行 `<tool> <version>`（如 `php 8.5.10`）。"""
+    out: list[PlatformVer] = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].lower() == "php":
+            out.append(PlatformVer("php", parts[1], rel, exact=True))
+    return out
+
+
+#: 独立文件 → 平台提取器（**不产生依赖、不计入 `files`**）
+PLATFORM_FILES = {
+    ".php-version": _plat_php_version,
+    ".tool-versions": _plat_tool_versions,
+}
+
+#: 与依赖清单同一个文件里顺带提取（composer 的 require.php / platform 段）
+PLATFORM_IN_MANIFEST = {
+    "composer.json": _plat_composer_json,
+    "composer.lock": _plat_composer_lock,
+    "go.mod": _plat_go_mod,
+    "Gemfile": _plat_gemfile,
+    "Cargo.toml": _plat_cargo_toml,
+}
+
+
+def platform_parser_for(fn: str):
+    """按文件名选平台提取器（含 `Dockerfile` / `Dockerfile.*` / `*.Dockerfile`）。"""
+    if fn in PLATFORM_FILES:
+        return PLATFORM_FILES[fn]
+    low = fn.lower()
+    if low == "dockerfile" or low.startswith("dockerfile.") or low.endswith(".dockerfile"):
+        return _plat_dockerfile
+    return None
+
+
 #: 文件名 → 解析器（**顺序即优先级**：lock 在后、但会被去重）
 PARSERS = {
     "composer.json": _p_composer_json,
@@ -371,6 +634,9 @@ PARSERS = {
     "package-lock.json": _p_package_lock_json,
     "pyproject.toml": _p_pyproject_toml,
     "Pipfile": _p_pipfile_toml,
+    "go.mod": _p_go_mod,
+    "Gemfile": _p_gemfile,
+    "Cargo.toml": _p_cargo_toml,
 }
 
 
@@ -399,8 +665,19 @@ def build(codebase_id: str) -> Sbom:
             if parser is None and _is_requirements(fn):
                 parser = _p_requirements
             if parser is None:
-                if fn in UNSUPPORTED:
-                    sb.unparsed.append(rel)                  # 显式记下「没查」
+                plat = platform_parser_for(fn)
+                if plat is None:
+                    if fn in UNSUPPORTED:
+                        sb.unparsed.append(rel)              # 显式记下「没查」
+                    continue
+                # 平台声明文件：只取运行时版本，**不产生依赖、不计入 files**
+                try:
+                    pfp = pathlib.Path(dirpath) / fn
+                    if pfp.stat().st_size <= 4 * 1024 * 1024:
+                        sb.platform.extend(
+                            plat(pfp.read_text(encoding="utf-8", errors="replace"), rel))
+                except Exception as e:                        # noqa: BLE001
+                    sb.parse_errors.append(f"{rel}：{type(e).__name__}: {str(e)[:80]}")
                 continue
             fp = pathlib.Path(dirpath) / fn
             try:
@@ -415,6 +692,14 @@ def build(codebase_id: str) -> Sbom:
                 continue
             sb.files.append(rel)
             sb.deps.extend(deps[:MAX_DEPS])
+            # 同一份清单里顺带取平台版本（composer 的 require.php / platform 段）
+            side = PLATFORM_IN_MANIFEST.get(fn)
+            if side is not None:
+                try:
+                    sb.platform.extend(side(text, rel))
+                except Exception as e:                        # noqa: BLE001
+                    # 平台段坏掉不应让整份依赖清单失败，但要留痕
+                    sb.parse_errors.append(f"{rel}（平台段）：{type(e).__name__}: {str(e)[:60]}")
 
     # ---- 合并：同一 (生态, 名字) 只留一条，**优先保留 resolved 的那条** ----
     best: dict[tuple[str, str], Dep] = {}
@@ -426,6 +711,17 @@ def build(codebase_id: str) -> Sbom:
         elif d.resolved == cur.resolved and d.clues and not cur.clues:
             best[key] = d
     sb.deps = sorted(best.values(), key=lambda d: (d.ecosystem, d.name.lower()))
+
+    # ---- 平台版本去重：同一 (名字, 版本) 只留一条，**优先保留精确来源** ----
+    pbest: dict[tuple[str, str], PlatformVer] = {}
+    for p in sb.platform:
+        key = (p.name.lower(), p.version)
+        cur = pbest.get(key)
+        if cur is None or (p.exact and not cur.exact):
+            pbest[key] = p
+    sb.platform = sorted(pbest.values(),
+                         key=lambda p: (p.name.lower(), not p.exact, p.version))
+
     sb.files.sort()
     sb.unparsed.sort()
     return sb

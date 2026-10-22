@@ -909,7 +909,7 @@ class ToolRegistry:
                 "alias": "code_search",
                 "description": "在已入库代码里定位候选。五种模式：`sink`（危险调用点，按内置规则库）、"
                                "`regex <模式>`、`symbol <名字>`（定义）、`string <内容>`（含硬编码密钥类）、"
-                               "`deps [名字]`（依赖清单与线索）。结果带 `文件:行号` + 该行原文。",
+                               "`deps [名字|all]`（依赖清单与线索；`all` = 全量清单）。结果带 `文件:行号` + 该行原文。",
                 "risk_level": "L0",
                 "risk_reason": "纯本地检索，无出网、不执行目标代码",
                 "caveat": "target = codebase_id；args = `<模式> [查询]`，不写模式时按 sink 全量。"
