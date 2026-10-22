@@ -40,6 +40,14 @@ config.yaml
 data/runtime.json
 *.bak
 
+# 本地 SQLite 数据库（项目/会话/步骤/事实…）
+# 虽然新装时它是空表，但它**是运行时数据**、会随使用长大。
+# 不加这条时 `git add -A` 会把它（233KB）带进公开仓库 —— 2026-10-21 核对时发现的隐患。
+data/projects.db
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
 # Python 代码执行通道留档（py_exec）
 # 每段执行过的代码按 data/scripts/exec/<目标域名>/exec_<时间戳>.py 留档，
 # 目录名本身即目标、代码内可能含 payload/凭据。仓库为 public，必须排除。
